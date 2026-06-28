@@ -1,0 +1,3 @@
+# IRIS C Library
+
+IRIS is a lightweight C library that provides basic linear algebra and numerical utilities, including vector types (2D, 3D, and 4D), dot and cross products, length computations, normalization, and fast reciprocal square root operations. It is designed to be minimal, predictable, and dependency-free, with a focus on clear, explicit APIs and consistent performance characteristics. The library avoids high-level abstractions and external dependencies, making it suitable for low-level systems where control over computation and memory behavior is important.
