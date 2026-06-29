@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: MIT */
-#define LINALG_IMPLEMENTATION
 /*
  * Linear algebra types and operations for float and int vectors.
  * Covers vec2, vec3, and vec4 for both types.
@@ -18,9 +17,7 @@
 #define VEC_DECL static inline
 #endif
 
-#define EPS 1e-6f
-#define VMASK_TRUE  (-1)
-#define VMASK_FALSE 0
+#define LINALG_EPS 1e-6f
 
 typedef struct { int x, y; }       vec2i_t;
 typedef struct { int x, y, z; }    vec3i_t;
@@ -30,33 +27,38 @@ typedef struct { float x, y; }       vec2f_t;
 typedef struct { float x, y, z; }    vec3f_t;
 typedef struct { float x, y, z, w; } vec4f_t;
 
-typedef vec2i_t vmask2_t;
-typedef vec3i_t vmask3_t;
-typedef vec4i_t vmask4_t;
+typedef unsigned int vmask_t;
 
-static const vec2f_t VEC2F_ZERO = {0.0f, 0.0f};
-static const vec3f_t VEC3F_ZERO = {0.0f, 0.0f, 0.0f};
-static const vec4f_t VEC4F_ZERO = {0.0f, 0.0f, 0.0f, 0.0f};
+typedef struct { vmask_t x, y; }       vmask2_t;
+typedef struct { vmask_t x, y, z; }    vmask3_t;
+typedef struct { vmask_t x, y, z, w; } vmask4_t;
 
-static const vec2i_t VEC2I_ZERO = {0, 0};
-static const vec3i_t VEC3I_ZERO = {0, 0, 0};
-static const vec4i_t VEC4I_ZERO = {0, 0, 0, 0};
+#define VMASK_TRUE  ((vmask_t)0xFFFFFFFFu)
+#define VMASK_FALSE ((vmask_t)0u)
 
-static const vec2f_t VEC2F_ONE = {1.0f, 1.0f};
-static const vec3f_t VEC3F_ONE = {1.0f, 1.0f, 1.0f};
-static const vec4f_t VEC4F_ONE = {1.0f, 1.0f, 1.0f, 1.0f};
+#define VMASK2_ZERO ((vmask2_t){0u, 0u})
+#define VMASK3_ZERO ((vmask3_t){0u, 0u, 0u})
+#define VMASK4_ZERO ((vmask4_t){0u, 0u, 0u, 0u})
 
-static const vec2i_t VEC2I_ONE = {1, 1};
-static const vec3i_t VEC3I_ONE = {1, 1, 1};
-static const vec4i_t VEC4I_ONE = {1, 1, 1, 1};
+#define VMASK2_ALL  ((vmask2_t){0xFFFFFFFFu, 0xFFFFFFFFu})
+#define VMASK3_ALL  ((vmask3_t){0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu})
+#define VMASK4_ALL  ((vmask4_t){0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu})
 
-static const vmask2_t VMASK2_FALSE = { 0, 0 };
-static const vmask3_t VMASK3_FALSE = { 0, 0, 0 };
-static const vmask4_t VMASK4_FALSE = { 0, 0, 0, 0 };
+#define VEC2F_ZERO ((vec2f_t){0.0f, 0.0f})
+#define VEC3F_ZERO ((vec3f_t){0.0f, 0.0f, 0.0f})
+#define VEC4F_ZERO ((vec4f_t){0.0f, 0.0f, 0.0f, 0.0f})
 
-static const vmask2_t VMASK2_TRUE  = { -1, -1 };
-static const vmask3_t VMASK3_TRUE  = { -1, -1, -1 };
-static const vmask4_t VMASK4_TRUE  = { -1, -1, -1, -1 };
+#define VEC2I_ZERO ((vec2i_t){0, 0})
+#define VEC3I_ZERO ((vec3i_t){0, 0, 0})
+#define VEC4I_ZERO ((vec4i_t){0, 0, 0, 0})
+
+#define VEC2F_ONE  ((vec2f_t){1.0f, 1.0f})
+#define VEC3F_ONE  ((vec3f_t){1.0f, 1.0f, 1.0f})
+#define VEC4F_ONE  ((vec4f_t){1.0f, 1.0f, 1.0f, 1.0f})
+
+#define VEC2I_ONE  ((vec2i_t){1, 1})
+#define VEC3I_ONE  ((vec3i_t){1, 1, 1})
+#define VEC4I_ONE  ((vec4i_t){1, 1, 1, 1})
 
 #define VEC2I_SPLAT(x) ((vec2i_t){x,x})
 #define VEC3I_SPLAT(x) ((vec3i_t){x,x,x})
@@ -226,6 +228,90 @@ VEC_DECL vec2f_t vf2select(vec2f_t vs1, vec2f_t vs2, vmask2_t m);
 VEC_DECL vec3f_t vf3select(vec3f_t vs1, vec3f_t vs2, vmask3_t m);
 VEC_DECL vec4f_t vf4select(vec4f_t vs1, vec4f_t vs2, vmask4_t m);
 
+/* integer vector comparisons */
+
+VEC_DECL vmask2_t v2cmpeq_vv(vec2i_t vs1, vec2i_t vs2);
+VEC_DECL vmask3_t v3cmpeq_vv(vec3i_t vs1, vec3i_t vs2);
+VEC_DECL vmask4_t v4cmpeq_vv(vec4i_t vs1, vec4i_t vs2);
+
+VEC_DECL vmask2_t v2cmpeq_vx(vec2i_t vs1, int x);
+VEC_DECL vmask3_t v3cmpeq_vx(vec3i_t vs1, int x);
+VEC_DECL vmask4_t v4cmpeq_vx(vec4i_t vs1, int x);
+
+VEC_DECL vmask2_t v2cmplt_vv(vec2i_t vs1, vec2i_t vs2);
+VEC_DECL vmask3_t v3cmplt_vv(vec3i_t vs1, vec3i_t vs2);
+VEC_DECL vmask4_t v4cmplt_vv(vec4i_t vs1, vec4i_t vs2);
+
+VEC_DECL vmask2_t v2cmplt_vx(vec2i_t vs1, int x);
+VEC_DECL vmask3_t v3cmplt_vx(vec3i_t vs1, int x);
+VEC_DECL vmask4_t v4cmplt_vx(vec4i_t vs1, int x);
+
+VEC_DECL vmask2_t v2cmpgt_vv(vec2i_t vs1, vec2i_t vs2);
+VEC_DECL vmask3_t v3cmpgt_vv(vec3i_t vs1, vec3i_t vs2);
+VEC_DECL vmask4_t v4cmpgt_vv(vec4i_t vs1, vec4i_t vs2);
+
+VEC_DECL vmask2_t v2cmpgt_vx(vec2i_t vs1, int x);
+VEC_DECL vmask3_t v3cmpgt_vx(vec3i_t vs1, int x);
+VEC_DECL vmask4_t v4cmpgt_vx(vec4i_t vs1, int x);
+
+VEC_DECL vmask2_t v2cmple_vv(vec2i_t vs1, vec2i_t vs2);
+VEC_DECL vmask3_t v3cmple_vv(vec3i_t vs1, vec3i_t vs2);
+VEC_DECL vmask4_t v4cmple_vv(vec4i_t vs1, vec4i_t vs2);
+
+VEC_DECL vmask2_t v2cmple_vx(vec2i_t vs1, int x);
+VEC_DECL vmask3_t v3cmple_vx(vec3i_t vs1, int x);
+VEC_DECL vmask4_t v4cmple_vx(vec4i_t vs1, int x);
+
+VEC_DECL vmask2_t v2cmpge_vv(vec2i_t vs1, vec2i_t vs2);
+VEC_DECL vmask3_t v3cmpge_vv(vec3i_t vs1, vec3i_t vs2);
+VEC_DECL vmask4_t v4cmpge_vv(vec4i_t vs1, vec4i_t vs2);
+
+VEC_DECL vmask2_t v2cmpge_vx(vec2i_t vs1, int x);
+VEC_DECL vmask3_t v3cmpge_vx(vec3i_t vs1, int x);
+VEC_DECL vmask4_t v4cmpge_vx(vec4i_t vs1, int x);
+
+/* float vector comparisons */
+
+VEC_DECL vmask2_t vf2cmpeq_vv(vec2f_t vs1, vec2f_t vs2);
+VEC_DECL vmask3_t vf3cmpeq_vv(vec3f_t vs1, vec3f_t vs2);
+VEC_DECL vmask4_t vf4cmpeq_vv(vec4f_t vs1, vec4f_t vs2);
+
+VEC_DECL vmask2_t vf2cmpeq_vf(vec2f_t vs1, float f);
+VEC_DECL vmask3_t vf3cmpeq_vf(vec3f_t vs1, float f);
+VEC_DECL vmask4_t vf4cmpeq_vf(vec4f_t vs1, float f);
+
+VEC_DECL vmask2_t vf2cmplt_vv(vec2f_t vs1, vec2f_t vs2);
+VEC_DECL vmask3_t vf3cmplt_vv(vec3f_t vs1, vec3f_t vs2);
+VEC_DECL vmask4_t vf4cmplt_vv(vec4f_t vs1, vec4f_t vs2);
+
+VEC_DECL vmask2_t vf2cmplt_vf(vec2f_t vs1, float f);
+VEC_DECL vmask3_t vf3cmplt_vf(vec3f_t vs1, float f);
+VEC_DECL vmask4_t vf4cmplt_vf(vec4f_t vs1, float f);
+
+VEC_DECL vmask2_t vf2cmpgt_vv(vec2f_t vs1, vec2f_t vs2);
+VEC_DECL vmask3_t vf3cmpgt_vv(vec3f_t vs1, vec3f_t vs2);
+VEC_DECL vmask4_t vf4cmpgt_vv(vec4f_t vs1, vec4f_t vs2);
+
+VEC_DECL vmask2_t vf2cmpgt_vf(vec2f_t vs1, float f);
+VEC_DECL vmask3_t vf3cmpgt_vf(vec3f_t vs1, float f);
+VEC_DECL vmask4_t vf4cmpgt_vf(vec4f_t vs1, float f);
+
+VEC_DECL vmask2_t vf2cmple_vv(vec2f_t vs1, vec2f_t vs2);
+VEC_DECL vmask3_t vf3cmple_vv(vec3f_t vs1, vec3f_t vs2);
+VEC_DECL vmask4_t vf4cmple_vv(vec4f_t vs1, vec4f_t vs2);
+
+VEC_DECL vmask2_t vf2cmple_vf(vec2f_t vs1, float f);
+VEC_DECL vmask3_t vf3cmple_vf(vec3f_t vs1, float f);
+VEC_DECL vmask4_t vf4cmple_vf(vec4f_t vs1, float f);
+
+VEC_DECL vmask2_t vf2cmpge_vv(vec2f_t vs1, vec2f_t vs2);
+VEC_DECL vmask3_t vf3cmpge_vv(vec3f_t vs1, vec3f_t vs2);
+VEC_DECL vmask4_t vf4cmpge_vv(vec4f_t vs1, vec4f_t vs2);
+
+VEC_DECL vmask2_t vf2cmpge_vf(vec2f_t vs1, float f);
+VEC_DECL vmask3_t vf3cmpge_vf(vec3f_t vs1, float f);
+VEC_DECL vmask4_t vf4cmpge_vf(vec4f_t vs1, float f);
+
 #endif // LINALG_H
 
 #ifdef LINALG_IMPLEMENTATION
@@ -275,6 +361,19 @@ static inline float i_linalg_minf(float v1, float v2)
 static inline float i_linalg_maxf(float v1, float v2)
 {
 	return v1 > v2 ? v1 : v2;
+}
+
+static inline int i_linalg_maski(int a, int b, vmask_t mask)
+{
+	return (int)((a & mask) | (b & ~mask));
+}
+
+static inline float i_linalg_maskf(float a, float b, vmask_t mask)
+{
+	union { float f; int i; } A = {a}, B = {b}, R;
+
+	R.i = (A.i & mask) | (B.i & ~mask);
+	return R.f;
 }
 
 // -------------------------------------------------
@@ -582,7 +681,7 @@ VEC_DECL float vf2length_v(vec2f_t v)
 {
 	float len2 = vf2dot_vv(v, v);
 
-	if (len2 < EPS) return 0.0f;
+	if (len2 < LINALG_EPS) return 0.0f;
 
 	return len2 * i_linalg_rsqrtf(len2);
 }
@@ -591,7 +690,7 @@ VEC_DECL float vf3length_v(vec3f_t v)
 {
 	float len2 = vf3dot_vv(v, v);
 
-	if (len2 < EPS) return 0.0f;
+	if (len2 < LINALG_EPS) return 0.0f;
 
 	return len2 * i_linalg_rsqrtf(len2);
 }
@@ -600,7 +699,7 @@ VEC_DECL float vf4length_v(vec4f_t v)
 {
 	float len2 = vf4dot_vv(v, v);
 
-	if (len2 < EPS) return 0.0f;
+	if (len2 < LINALG_EPS) return 0.0f;
 
 	return len2 * i_linalg_rsqrtf(len2);
 }
@@ -955,44 +1054,419 @@ VEC_DECL float vf4redmax_v(vec4f_t v)
 	return i_linalg_maxf(i_linalg_maxf(v.x, v.y), i_linalg_maxf(v.z, v.w));
 }
 
+// -------------------------------------------------
+// MASKING IMPLEMENTATION
+// -------------------------------------------------
+
 VEC_DECL vec2i_t v2select(vec2i_t vs1, vec2i_t vs2, vmask2_t m)
 {
-	return (vec2i_t){ .x = m.x ? vs1.x : vs2.x, .y = m.y ? vs1.y : vs2.y };
+	return (vec2i_t){ .x = i_linalg_maski(vs1.x, vs2.x, m.x),
+			  .y = i_linalg_maski(vs1.y, vs2.y, m.y) };
 }
 
 VEC_DECL vec3i_t v3select(vec3i_t vs1, vec3i_t vs2, vmask3_t m)
 {
-	return (vec3i_t){ .x = m.x ? vs1.x : vs2.x,
-			  .y = m.y ? vs1.y : vs2.y,
-			  .z = m.z ? vs1.z : vs2.z };
+	return (vec3i_t){ .x = i_linalg_maski(vs1.x, vs2.x, m.x),
+			  .y = i_linalg_maski(vs1.y, vs2.y, m.y),
+			  .z = i_linalg_maski(vs1.z, vs2.z, m.z) };
 }
 
 VEC_DECL vec4i_t v4select(vec4i_t vs1, vec4i_t vs2, vmask4_t m)
 {
-	return (vec4i_t){ .x = m.x ? vs1.x : vs2.x,
-			  .y = m.y ? vs1.y : vs2.y,
-			  .z = m.z ? vs1.z : vs2.z,
-			  .w = m.w ? vs1.w : vs2.w };
+	return (vec4i_t){ .x = i_linalg_maski(vs1.x, vs2.x, m.x),
+			  .y = i_linalg_maski(vs1.y, vs2.y, m.y),
+			  .z = i_linalg_maski(vs1.z, vs2.z, m.z),
+			  .w = i_linalg_maski(vs1.w, vs2.w, m.w) };
 }
 
 VEC_DECL vec2f_t vf2select(vec2f_t vs1, vec2f_t vs2, vmask2_t m)
 {
-	return (vec2f_t){ .x = m.x ? vs1.x : vs2.x, .y = m.y ? vs1.y : vs2.y };
+	return (vec2f_t){ .x = i_linalg_maskf(vs1.x, vs2.x, m.x),
+			  .y = i_linalg_maskf(vs1.y, vs2.y, m.y) };
 }
 
 VEC_DECL vec3f_t vf3select(vec3f_t vs1, vec3f_t vs2, vmask3_t m)
 {
-	return (vec3f_t){ .x = m.x ? vs1.x : vs2.x,
-			  .y = m.y ? vs1.y : vs2.y,
-			  .z = m.z ? vs1.z : vs2.z };
+	return (vec3f_t){ .x = i_linalg_maskf(vs1.x, vs2.x, m.x),
+			  .y = i_linalg_maskf(vs1.y, vs2.y, m.y),
+			  .z = i_linalg_maskf(vs1.z, vs2.z, m.z) };
 }
 
 VEC_DECL vec4f_t vf4select(vec4f_t vs1, vec4f_t vs2, vmask4_t m)
 {
-	return (vec4f_t){ .x = m.x ? vs1.x : vs2.x,
-			  .y = m.y ? vs1.y : vs2.y,
-			  .z = m.z ? vs1.z : vs2.z,
-			  .w = m.w ? vs1.w : vs2.w };
+	return (vec4f_t){ .x = i_linalg_maskf(vs1.x, vs2.x, m.x),
+			  .y = i_linalg_maskf(vs1.y, vs2.y, m.y),
+			  .z = i_linalg_maskf(vs1.z, vs2.z, m.z),
+			  .w = i_linalg_maskf(vs1.w, vs2.w, m.w) };
+}
+
+#define VEC_MASK_I2_OP(op, a, b) \
+	((vmask2_t){ (vmask_t)-((a).x op (b).x), (vmask_t)-((a).y op (b).y) })
+
+#define VEC_MASK_I3_OP(op, a, b) \
+	((vmask3_t){ (vmask_t)-((a).x op (b).x), (vmask_t)-((a).y op (b).y), (vmask_t)-((a).z op (b).z) })
+
+#define VEC_MASK_I4_OP(op, a, b) \
+	((vmask4_t){ (vmask_t)-((a).x op (b).x), (vmask_t)-((a).y op (b).y), (vmask_t)-((a).z op (b).z), (vmask_t)-((a).w op (b).w) })
+
+#define VEC_MASK_I2_X(op, a, x) \
+	((vmask2_t){ (vmask_t)-((a).x op (x)), (vmask_t)-((a).y op (x)) })
+
+#define VEC_MASK_I3_X(op, a, x) \
+	((vmask3_t){ (vmask_t)-((a).x op (x)), (vmask_t)-((a).y op (x)), (vmask_t)-((a).z op (x)) })
+
+#define VEC_MASK_I4_X(op, a, x) \
+	((vmask4_t){ (vmask_t)-((a).x op (x)), (vmask_t)-((a).y op (x)), (vmask_t)-((a).z op (x)), (vmask_t)-((a).w op (x)) })
+
+#define VEC_MASK_F2_OP(op, a, b) \
+	((vmask2_t){ (vmask_t)-((a).x op (b).x), (vmask_t)-((a).y op (b).y) })
+
+#define VEC_MASK_F3_OP(op, a, b) \
+	((vmask3_t){ (vmask_t)-((a).x op (b).x), (vmask_t)-((a).y op (b).y), (vmask_t)-((a).z op (b).z) })
+
+#define VEC_MASK_F4_OP(op, a, b) \
+	((vmask4_t){ (vmask_t)-((a).x op (b).x), (vmask_t)-((a).y op (b).y), (vmask_t)-((a).z op (b).z), (vmask_t)-((a).w op (b).w) })
+
+#define VEC_MASK_F2_X(op, a, f) \
+	((vmask2_t){ (vmask_t)-((a).x op (f)), (vmask_t)-((a).y op (f)) })
+
+#define VEC_MASK_F3_X(op, a, f) \
+	((vmask3_t){ (vmask_t)-((a).x op (f)), (vmask_t)-((a).y op (f)), (vmask_t)-((a).z op (f)) })
+
+#define VEC_MASK_F4_X(op, a, f) \
+	((vmask4_t){ (vmask_t)-((a).x op (f)), (vmask_t)-((a).y op (f)), (vmask_t)-((a).z op (f)), (vmask_t)-((a).w op (f)) })
+
+/* =========================
+   INTEGER VECTOR COMPARISONS
+   ========================= */
+
+VEC_DECL vmask2_t v2cmpeq_vv(vec2i_t vs1, vec2i_t vs2)
+{
+	return VEC_MASK_I2_OP(==, vs1, vs2);
+}
+
+VEC_DECL vmask3_t v3cmpeq_vv(vec3i_t vs1, vec3i_t vs2)
+{
+	return VEC_MASK_I3_OP(==, vs1, vs2);
+}
+
+VEC_DECL vmask4_t v4cmpeq_vv(vec4i_t vs1, vec4i_t vs2)
+{
+	return VEC_MASK_I4_OP(==, vs1, vs2);
+}
+
+VEC_DECL vmask2_t v2cmpeq_vx(vec2i_t vs1, int x)
+{
+	return VEC_MASK_I2_X(==, vs1, x);
+}
+
+VEC_DECL vmask3_t v3cmpeq_vx(vec3i_t vs1, int x)
+{
+	return VEC_MASK_I3_X(==, vs1, x);
+}
+
+VEC_DECL vmask4_t v4cmpeq_vx(vec4i_t vs1, int x)
+{
+	return VEC_MASK_I4_X(==, vs1, x);
+}
+
+
+/* ---- cmplt ---- */
+
+VEC_DECL vmask2_t v2cmplt_vv(vec2i_t vs1, vec2i_t vs2)
+{
+	return VEC_MASK_I2_OP(<, vs1, vs2);
+}
+
+VEC_DECL vmask3_t v3cmplt_vv(vec3i_t vs1, vec3i_t vs2)
+{
+	return VEC_MASK_I3_OP(<, vs1, vs2);
+}
+
+VEC_DECL vmask4_t v4cmplt_vv(vec4i_t vs1, vec4i_t vs2)
+{
+	return VEC_MASK_I4_OP(<, vs1, vs2);
+}
+
+VEC_DECL vmask2_t v2cmplt_vx(vec2i_t vs1, int x)
+{
+	return VEC_MASK_I2_X(<, vs1, x);
+}
+
+VEC_DECL vmask3_t v3cmplt_vx(vec3i_t vs1, int x)
+{
+	return VEC_MASK_I3_X(<, vs1, x);
+}
+
+VEC_DECL vmask4_t v4cmplt_vx(vec4i_t vs1, int x)
+{
+	return VEC_MASK_I4_X(<, vs1, x);
+}
+
+
+/* ---- cmpgt ---- */
+
+VEC_DECL vmask2_t v2cmpgt_vv(vec2i_t vs1, vec2i_t vs2)
+{
+	return VEC_MASK_I2_OP(>, vs1, vs2);
+}
+
+VEC_DECL vmask3_t v3cmpgt_vv(vec3i_t vs1, vec3i_t vs2)
+{
+	return VEC_MASK_I3_OP(>, vs1, vs2);
+}
+
+VEC_DECL vmask4_t v4cmpgt_vv(vec4i_t vs1, vec4i_t vs2)
+{
+	return VEC_MASK_I4_OP(>, vs1, vs2);
+}
+
+VEC_DECL vmask2_t v2cmpgt_vx(vec2i_t vs1, int x)
+{
+	return VEC_MASK_I2_X(>, vs1, x);
+}
+
+VEC_DECL vmask3_t v3cmpgt_vx(vec3i_t vs1, int x)
+{
+	return VEC_MASK_I3_X(>, vs1, x);
+}
+
+VEC_DECL vmask4_t v4cmpgt_vx(vec4i_t vs1, int x)
+{
+	return VEC_MASK_I4_X(>, vs1, x);
+}
+
+
+/* ---- cmple ---- */
+
+VEC_DECL vmask2_t v2cmple_vv(vec2i_t vs1, vec2i_t vs2)
+{
+	return VEC_MASK_I2_OP(<=, vs1, vs2);
+}
+
+VEC_DECL vmask3_t v3cmple_vv(vec3i_t vs1, vec3i_t vs2)
+{
+	return VEC_MASK_I3_OP(<=, vs1, vs2);
+}
+
+VEC_DECL vmask4_t v4cmple_vv(vec4i_t vs1, vec4i_t vs2)
+{
+	return VEC_MASK_I4_OP(<=, vs1, vs2);
+}
+
+VEC_DECL vmask2_t v2cmple_vx(vec2i_t vs1, int x)
+{
+	return VEC_MASK_I2_X(<=, vs1, x);
+}
+
+VEC_DECL vmask3_t v3cmple_vx(vec3i_t vs1, int x)
+{
+	return VEC_MASK_I3_X(<=, vs1, x);
+}
+
+VEC_DECL vmask4_t v4cmple_vx(vec4i_t vs1, int x)
+{
+	return VEC_MASK_I4_X(<=, vs1, x);
+}
+
+
+/* ---- cmpge ---- */
+
+VEC_DECL vmask2_t v2cmpge_vv(vec2i_t vs1, vec2i_t vs2)
+{
+	return VEC_MASK_I2_OP(>=, vs1, vs2);
+}
+
+VEC_DECL vmask3_t v3cmpge_vv(vec3i_t vs1, vec3i_t vs2)
+{
+	return VEC_MASK_I3_OP(>=, vs1, vs2);
+}
+
+VEC_DECL vmask4_t v4cmpge_vv(vec4i_t vs1, vec4i_t vs2)
+{
+	return VEC_MASK_I4_OP(>=, vs1, vs2);
+}
+
+VEC_DECL vmask2_t v2cmpge_vx(vec2i_t vs1, int x)
+{
+	return VEC_MASK_I2_X(>=, vs1, x);
+}
+
+VEC_DECL vmask3_t v3cmpge_vx(vec3i_t vs1, int x)
+{
+	return VEC_MASK_I3_X(>=, vs1, x);
+}
+
+VEC_DECL vmask4_t v4cmpge_vx(vec4i_t vs1, int x)
+{
+	return VEC_MASK_I4_X(>=, vs1, x);
+}
+
+
+/* =========================
+   FLOAT VECTOR COMPARISONS
+   ========================= */
+
+VEC_DECL vmask2_t vf2cmpeq_vv(vec2f_t vs1, vec2f_t vs2)
+{
+	return VEC_MASK_F2_OP(==, vs1, vs2);
+}
+
+VEC_DECL vmask3_t vf3cmpeq_vv(vec3f_t vs1, vec3f_t vs2)
+{
+	return VEC_MASK_F3_OP(==, vs1, vs2);
+}
+
+VEC_DECL vmask4_t vf4cmpeq_vv(vec4f_t vs1, vec4f_t vs2)
+{
+	return VEC_MASK_F4_OP(==, vs1, vs2);
+}
+
+VEC_DECL vmask2_t vf2cmpeq_vf(vec2f_t vs1, float f)
+{
+	return VEC_MASK_F2_X(==, vs1, f);
+}
+
+VEC_DECL vmask3_t vf3cmpeq_vf(vec3f_t vs1, float f)
+{
+	return VEC_MASK_F3_X(==, vs1, f);
+}
+
+VEC_DECL vmask4_t vf4cmpeq_vf(vec4f_t vs1, float f)
+{
+	return VEC_MASK_F4_X(==, vs1, f);
+}
+
+
+/* ---- cmplt ---- */
+
+VEC_DECL vmask2_t vf2cmplt_vv(vec2f_t vs1, vec2f_t vs2)
+{
+	return VEC_MASK_F2_OP(<, vs1, vs2);
+}
+
+VEC_DECL vmask3_t vf3cmplt_vv(vec3f_t vs1, vec3f_t vs2)
+{
+	return VEC_MASK_F3_OP(<, vs1, vs2);
+}
+
+VEC_DECL vmask4_t vf4cmplt_vv(vec4f_t vs1, vec4f_t vs2)
+{
+	return VEC_MASK_F4_OP(<, vs1, vs2);
+}
+
+VEC_DECL vmask2_t vf2cmplt_vf(vec2f_t vs1, float f)
+{
+	return VEC_MASK_F2_X(<, vs1, f);
+}
+
+VEC_DECL vmask3_t vf3cmplt_vf(vec3f_t vs1, float f)
+{
+	return VEC_MASK_F3_X(<, vs1, f);
+}
+
+VEC_DECL vmask4_t vf4cmplt_vf(vec4f_t vs1, float f)
+{
+	return VEC_MASK_F4_X(<, vs1, f);
+}
+
+
+/* ---- cmpgt ---- */
+
+VEC_DECL vmask2_t vf2cmpgt_vv(vec2f_t vs1, vec2f_t vs2)
+{
+	return VEC_MASK_F2_OP(>, vs1, vs2);
+}
+
+VEC_DECL vmask3_t vf3cmpgt_vv(vec3f_t vs1, vec3f_t vs2)
+{
+	return VEC_MASK_F3_OP(>, vs1, vs2);
+}
+
+VEC_DECL vmask4_t vf4cmpgt_vv(vec4f_t vs1, vec4f_t vs2)
+{
+	return VEC_MASK_F4_OP(>, vs1, vs2);
+}
+
+VEC_DECL vmask2_t vf2cmpgt_vf(vec2f_t vs1, float f)
+{
+	return VEC_MASK_F2_X(>, vs1, f);
+}
+
+VEC_DECL vmask3_t vf3cmpgt_vf(vec3f_t vs1, float f)
+{
+	return VEC_MASK_F3_X(>, vs1, f);
+}
+
+VEC_DECL vmask4_t vf4cmpgt_vf(vec4f_t vs1, float f)
+{
+	return VEC_MASK_F4_X(>, vs1, f);
+}
+
+
+/* ---- cmple ---- */
+
+VEC_DECL vmask2_t vf2cmple_vv(vec2f_t vs1, vec2f_t vs2)
+{
+	return VEC_MASK_F2_OP(<=, vs1, vs2);
+}
+
+VEC_DECL vmask3_t vf3cmple_vv(vec3f_t vs1, vec3f_t vs2)
+{
+	return VEC_MASK_F3_OP(<=, vs1, vs2);
+}
+
+VEC_DECL vmask4_t vf4cmple_vv(vec4f_t vs1, vec4f_t vs2)
+{
+	return VEC_MASK_F4_OP(<=, vs1, vs2);
+}
+
+VEC_DECL vmask2_t vf2cmple_vf(vec2f_t vs1, float f)
+{
+	return VEC_MASK_F2_X(<=, vs1, f);
+}
+
+VEC_DECL vmask3_t vf3cmple_vf(vec3f_t vs1, float f)
+{
+	return VEC_MASK_F3_X(<=, vs1, f);
+}
+
+VEC_DECL vmask4_t vf4cmple_vf(vec4f_t vs1, float f)
+{
+	return VEC_MASK_F4_X(<=, vs1, f);
+}
+
+
+/* ---- cmpge ---- */
+
+VEC_DECL vmask2_t vf2cmpge_vv(vec2f_t vs1, vec2f_t vs2)
+{
+	return VEC_MASK_F2_OP(>=, vs1, vs2);
+}
+
+VEC_DECL vmask3_t vf3cmpge_vv(vec3f_t vs1, vec3f_t vs2)
+{
+	return VEC_MASK_F3_OP(>=, vs1, vs2);
+}
+
+VEC_DECL vmask4_t vf4cmpge_vv(vec4f_t vs1, vec4f_t vs2)
+{
+	return VEC_MASK_F4_OP(>=, vs1, vs2);
+}
+
+VEC_DECL vmask2_t vf2cmpge_vf(vec2f_t vs1, float f)
+{
+	return VEC_MASK_F2_X(>=, vs1, f);
+}
+
+VEC_DECL vmask3_t vf3cmpge_vf(vec3f_t vs1, float f)
+{
+	return VEC_MASK_F3_X(>=, vs1, f);
+}
+
+VEC_DECL vmask4_t vf4cmpge_vf(vec4f_t vs1, float f)
+{
+	return VEC_MASK_F4_X(>=, vs1, f);
 }
 
 #endif // I_LINALG_IMPLEMENTATION
