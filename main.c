@@ -22,6 +22,17 @@ int main(void)
 	vec2f_t r2 = vf2select(af, bf, mf);
 
 	printf("x: %.3f, y: %.3f\n", r2.x, r2.y);
+	printf("%.3f\n", vf2redmin_v(r2));
+	printf("%.3f %.3f\n", vf2length_v(r2), vf2lengthsq_v(r2));
+
+	vec2f_t norm = vf2normalize_v(r2);
+	printf("x: %.3f, y: %.3f\n", norm.x, norm.y);
+
+	vec3i_t v1 = { 1, 1, 1 };
+	vec3i_t v2 = { -1, 1, 0 };
+
+	vec3i_t cross = v3cross_vv(v1, v2);
+	printf("x: %df, y: %df, z: %df\n", cross.x, cross.y, cross.z);
 
 	return 0;
 }
