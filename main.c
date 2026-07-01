@@ -272,8 +272,102 @@ int queuetest(void)
 	return ret;
 }
 
+void bfstest_undirected(void)
+{
+	/* Example graph (0-indexed, undirected):
+	 *   0 -- 1
+	 *   1 -- 2
+	 *   2 -- 3
+	 *   0 -- 3
+	 * vertex_count = 4, edge_count = 4
+	 * Expect BFS from origin 0: dist = [0, 1, 2, 1], prev[1]=0, prev[3]=0, prev[2]=1 or 3
+	 */
+	edge_t edges[] = {
+		{0, 1},
+		{1, 2},
+		{2, 3},
+		{0, 3},
+	};
+	graph_size_t edge_count   = 4;
+	graph_size_t vertex_count = 4;
+	graph_t g;
+	graph_bfs_result_t result;
+	graph_size_t i;
+
+	graph_construct(&g, edges, vertex_count, edge_count);
+	result = graph_bfs_al(&g, 0);
+
+	printf("[graph_t BFS] origin: %u\n", result.origin);
+
+	printf("visited: ");
+	for (i = 0; i < vertex_count; i++) printf("%d ", result.visited[i]);
+	printf("\n");
+
+	printf("dist: ");
+	for (i = 0; i < vertex_count; i++) printf("%u ", result.dist[i]);
+	printf("\n");
+
+	printf("prev: ");
+	for (i = 0; i < vertex_count; i++) printf("%u ", result.prev[i]);
+	printf("\n");
+
+	GRAPH_FREE(result.visited);
+	GRAPH_FREE(result.prev);
+	GRAPH_FREE(result.dist);
+	graph_destroy(&g);
+}
+
+void bfstest_directed(void)
+{
+	/* Directed:
+	 *   0 -> 1
+	 *   1 -> 2
+	 *   2 -> 3
+	 * vertex_count = 4, edge_count = 3
+	 * Expect BFS from origin 0: dist = [0, 1, 2, 3]
+	 */
+	edge_t edges[] = {
+		{0, 1},
+		{1, 2},
+		{2, 3},
+	};
+	graph_size_t edge_count   = 3;
+	graph_size_t vertex_count = 4;
+	dgraph_t g;
+	graph_bfs_result_t result;
+	graph_size_t i;
+
+	dgraph_construct(&g, edges, vertex_count, edge_count);
+	result = dgraph_bfs_al(&g, 0);
+
+	printf("[dgraph_t BFS] origin: %u\n", result.origin);
+
+	printf("visited: ");
+	for (i = 0; i < vertex_count; i++) printf("%d ", result.visited[i]);
+	printf("\n");
+
+	printf("dist: ");
+	for (i = 0; i < vertex_count; i++) printf("%u ", result.dist[i]);
+	printf("\n");
+
+	printf("prev: ");
+	for (i = 0; i < vertex_count; i++) printf("%u ", result.prev[i]);
+	printf("\n");
+
+	GRAPH_FREE(result.visited);
+	GRAPH_FREE(result.prev);
+	GRAPH_FREE(result.dist);
+	dgraph_destroy(&g);
+}
+
+void bfstest(void)
+{
+	bfstest_undirected();
+	bfstest_directed();
+}
+
 int main(void)
 {
-	queuetest();
+	bfstest();
 	return 0;
 }

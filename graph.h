@@ -130,11 +130,27 @@ GRAPH_DECL graph_dfs_result_t wfgraph_dfs_al(const wfgraph_t *g);
 GRAPH_DECL graph_dfs_result_t widgraph_dfs_al(const widgraph_t *g);
 GRAPH_DECL graph_dfs_result_t wfdgraph_dfs_al(const wfdgraph_t *g);
 
+typedef struct {
+	char 	     *visited;
+	vertex_id_t  *prev;
+	graph_size_t *dist;
+	vertex_id_t   origin;
+} graph_bfs_result_t;
+
+GRAPH_DECL graph_bfs_result_t graph_bfs_al(const graph_t *g, vertex_id_t origin);
+GRAPH_DECL graph_bfs_result_t dgraph_bfs_al(const dgraph_t *g, vertex_id_t origin);
+
 #endif // GRAPH_H
 
+//#define GRAPH_IMPLEMENTATION
 #ifdef GRAPH_IMPLEMENTATION
 #ifndef I_GRAPH_IMPLEMENTATION
 #define I_GRAPH_IMPLEMENTATION
+
+#ifndef QUEUE_IMPLEMENTATION
+#define QUEUE_IMPLEMENTATION
+#include "queue.h"
+#endif
 
 #if !((defined(GRAPH_MALLOC) == defined(GRAPH_FREE)) && \
       (defined(GRAPH_FREE) == defined(GRAPH_REALLOC)) && \
@@ -186,7 +202,7 @@ GRAPH_DECL graph_dfs_result_t wfdgraph_dfs_al(const wfdgraph_t *g);
 #define I_BFLAG_TYPEF   2
 #define I_DOREVQ(flags) (((flags) & I_BFLAG_REVERSE) != 0)
 
-static inline void i_csrgraph_builder(vertex_id_t *offsets, vertex_id_t *target, const edge_t *edges,
+static void i_csrgraph_builder(vertex_id_t *offsets, vertex_id_t *target, const edge_t *edges,
 					graph_size_t vertex_count, graph_size_t edge_count, int reverse)
 {
 	vertex_id_t *cursor;
@@ -213,7 +229,7 @@ static inline void i_csrgraph_builder(vertex_id_t *offsets, vertex_id_t *target,
 	GRAPH_FREE(cursor);
 }
 
-static inline void i_wcsrgraph_builder(vertex_id_t *offsets, vertex_id_t *target, void *out_weights,
+static void i_wcsrgraph_builder(vertex_id_t *offsets, vertex_id_t *target, void *out_weights,
 					const void *edges, graph_size_t vertex_count, graph_size_t edge_count,
 					int flags)
 {
@@ -441,9 +457,9 @@ GRAPH_DEFINE_WDGRAPH_DESTROY(wfdgraph_destroy, wfdgraph_t)
 
 /* ------------------------------------------------------------------- */
 
-#define I_DFS_UNVISITED ((vertex_id_t)-1)
+#define I_VTX_UNVISITED ((vertex_id_t)-1)
 
-static inline void
+static void
 i_dfs_visit_recursive(const vertex_id_t *offsets, const vertex_id_t *edges,
                        vertex_id_t v, vertex_id_t parent, vertex_id_t component,
                        graph_dfs_result_t *result, char *stacked, graph_size_t *postorder_idx)
@@ -457,7 +473,7 @@ i_dfs_visit_recursive(const vertex_id_t *offsets, const vertex_id_t *edges,
 
 		if (neighbor == parent) continue;
 
-		if (result->component_id[neighbor] == I_DFS_UNVISITED) {
+		if (result->component_id[neighbor] == I_VTX_UNVISITED) {
 			i_dfs_visit_recursive(offsets, edges, neighbor, v, component, result, stacked, postorder_idx);
 		} else if (stacked[neighbor]) {
 			result->has_cycle = 1;
@@ -468,7 +484,7 @@ i_dfs_visit_recursive(const vertex_id_t *offsets, const vertex_id_t *edges,
 	result->postorder[(*postorder_idx)++] = v;
 }
 
-static inline graph_dfs_result_t
+static graph_dfs_result_t
 i_dfs_core(const vertex_id_t *offsets, const vertex_id_t *edges, graph_size_t vertex_count)
 {
 	graph_dfs_result_t result;
@@ -483,12 +499,12 @@ i_dfs_core(const vertex_id_t *offsets, const vertex_id_t *edges, graph_size_t ve
 	result.has_cycle = 0;
 
 	for (i = 0; i < vertex_count; i++) {
-		result.component_id[i] = I_DFS_UNVISITED;
+		result.component_id[i] = I_VTX_UNVISITED;
 	}
 
 	for (i = 0; i < vertex_count; i++) {
-		if (result.component_id[i] == I_DFS_UNVISITED) {
-			i_dfs_visit_recursive(offsets, edges, (vertex_id_t)i, I_DFS_UNVISITED,
+		if (result.component_id[i] == I_VTX_UNVISITED) {
+			i_dfs_visit_recursive(offsets, edges, (vertex_id_t)i, I_VTX_UNVISITED,
 			                      (vertex_id_t)result.component_count, &result, stacked, &postorder_idx);
 			result.component_count++;
 		}
@@ -508,6 +524,57 @@ GRAPH_DEFINE_DFS(wigraph_dfs_al, wigraph_t)
 GRAPH_DEFINE_DFS(wfgraph_dfs_al, wfgraph_t)
 GRAPH_DEFINE_DFS(widgraph_dfs_al, widgraph_t)
 GRAPH_DEFINE_DFS(wfdgraph_dfs_al, wfdgraph_t)
+
+static graph_bfs_result_t
+i_bfs_core(const vertex_id_t *offsets, const vertex_id_t *edges, graph_size_t vertex_count, vertex_id_t origin)
+{
+	graph_bfs_result_t result;
+	graph_size_t i;
+	queue_t q;
+
+	result.visited = (char *)GRAPH_MALLOC(vertex_count * sizeof(char));
+	result.prev    = (vertex_id_t *)GRAPH_MALLOC(vertex_count * sizeof(vertex_id_t));
+	result.dist    = (graph_size_t *)GRAPH_MALLOC(vertex_count * sizeof(graph_size_t));
+	result.origin  = origin;
+
+	for (i = 0; i < vertex_count; ++i) {
+		result.visited[i] = 0;
+		result.prev[i]    = I_VTX_UNVISITED;
+		result.dist[i]    = I_VTX_UNVISITED;
+	}
+
+	queue_construct(&q, sizeof(vertex_id_t));
+
+	result.visited[origin] = 1;
+	result.dist[origin]    = 0;
+
+	queue_push(&q, vertex_id_t, origin);
+
+	while (!queue_empty(&q)) {
+		vertex_id_t v = queue_front(&q, vertex_id_t); queue_pop(&q);
+		vertex_id_t j;
+		
+		for (j = offsets[v]; j < offsets[v + 1]; ++j) {
+			vertex_id_t neighbor = edges[j];
+			if (!result.visited[neighbor]) {
+				result.visited[neighbor] = 1;
+				result.prev[neighbor]	 = v;
+				result.dist[neighbor]	 = result.dist[v] + 1;
+				queue_push(&q, vertex_id_t, neighbor);
+			}
+		}
+	}
+
+	queue_destroy(&q);
+	return result;
+}
+
+#define GRAPH_DEFINE_BFS(name, type) \
+GRAPH_DECL graph_bfs_result_t name(const type *g, vertex_id_t origin) \
+{ return i_bfs_core(g->offsets, g->edges, g->vertex_count, origin); }
+
+GRAPH_DEFINE_BFS(graph_bfs_al, graph_t)
+GRAPH_DEFINE_BFS(dgraph_bfs_al, dgraph_t)
 
 #endif // I_GRAPH_IMPLEMENTATION
 #endif // GRAPH_IMPLEMENTATION
