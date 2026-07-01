@@ -7,7 +7,7 @@
  * before including to emit function definitions. All other
  * translation units include normally and get declarations.
  *
- * Define VEC_DECL before including to override default linkage.
+ * Define GRAPH_DECL before including to override default linkage.
  */
 
 #ifndef GRAPH_H
