@@ -1,3 +1,15 @@
+/* SPDX-License-Identifier: MIT */
+/*
+ * Create undirected, directed, weighted, and unweighted graphs
+ * easily, and perform common graph algorithms with a simple C API.
+ *
+ * In exactly one translation unit define GRAPH_IMPLEMENTATION
+ * before including to emit function definitions. All other
+ * translation units include normally and get declarations.
+ *
+ * Define VEC_DECL before including to override default linkage.
+ */
+
 #ifndef GRAPH_H
 #define GRAPH_H
 
@@ -150,7 +162,7 @@ GRAPH_DECL graph_dfs_result_t wfdgraph_dfs_al(const wfdgraph_t *g);
 #define GRAPH_CALLOC calloc
 #endif /* GRAPH_CALLOC */
 
-#endif /* !defined(GRAPH_MALLOC) || !defined(GRAPH_FREE) || !defined(GRAPH_REALLOC) */
+#endif /* !defined(GRAPH_MALLOC) || !defined(GRAPH_FREE) || !defined(GRAPH_REALLOC) || !defined(GRAPH_CALLOC) */
 
 #if !(defined(GRAPH_MEMSET) == defined(GRAPH_MEMCPY))
 #error "You must either use the default mem ops or provide GRAPH_MEMSET and GRAPH_MEMCPY"

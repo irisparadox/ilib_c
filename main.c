@@ -7,6 +7,11 @@
 #define GRAPH_IMPLEMENTATION
 #include "graph.h"
 
+#define QUEUE_IMPLEMENTATION
+#include "queue.h"
+
+int que_err = 0;
+
 void vectest()
 {
 	vec2i_t a = { 10, -5 };
@@ -234,8 +239,41 @@ void graphtest(void)
 	graphtest_weighted_float_directed();
 }
 
+int queuetest(void)
+{
+	queue_t q;
+	if (queue_construct(&q, sizeof(int)) != 0) {
+		printf("Error on queue_construct(): %u\n", que_err);
+		return que_err;
+	}
+
+	int ret = queue_push(&q, int, 42);
+
+	printf("%d\n", queue_front(&q, int));
+
+	ret = queue_push(&q, int, 35);
+	ret = queue_pop(&q);
+
+	printf("%d\n", queue_front(&q, int));
+
+	ret = queue_pop(&q);
+
+	if (queue_empty(&q)) {
+		printf("pop returned: %d, front is: NULL\n", ret);
+	} else {
+		printf("pop returned: %d, front is: %d\n", ret, queue_front(&q, int));
+	}
+	
+	if (queue_destroy(&q) != 0) {
+		printf("Error on queue_destroy(): %u\n", que_err);
+		return que_err;
+	}
+
+	return ret;
+}
+
 int main(void)
 {
-	graphtest();
+	queuetest();
 	return 0;
 }
