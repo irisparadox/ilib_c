@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O3
+CFLAGS = -Wall -Wextra -std=c99 -O3
 
 TARGET = out/main
 

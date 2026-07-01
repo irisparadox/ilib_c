@@ -15,7 +15,7 @@
 
 #ifndef VEC_DECL
 #define VEC_DECL static inline
-#endif
+#endif /* VEC_DECL */
 
 #define LINALG_EPS 1e-6f
 

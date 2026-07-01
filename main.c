@@ -3,6 +3,8 @@
 #define LINALG_IMPLEMENTATION
 #include "linalg.h"
 
+#include "graph.h"
+
 int main(void)
 {
 	vec2i_t a = { 10, -5 };
