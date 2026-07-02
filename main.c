@@ -8,6 +8,7 @@
 #include "graph.h"
 
 #define QUEUE_IMPLEMENTATION
+#define PQUEUE_IMPLEMENTATION
 #include "queue.h"
 
 int que_err = 0;
@@ -366,8 +367,27 @@ void bfstest(void)
 	bfstest_directed();
 }
 
+static inline int pq_cmp_int_asc(const void *a, const void *b)
+{ return (*(const int *)a > *(const int *)b) - (*(const int *)a < *(const int *)b); }
+
+int pquetest(void)
+{
+	pqueue_t pq;
+	if (pqueue_construct(&pq, sizeof(int), pq_cmp_int_asc) != 0) {
+		printf("Error on pqueue_construct(): %u\n", que_err);
+		return que_err;
+	}
+
+	if (pqueue_destroy(&pq) != 0) {
+		printf("Error on pqueue_destroy(): %u\n", que_err);
+		return que_err;
+	}
+
+	return 0;
+}
+
 int main(void)
 {
-	bfstest();
+	pquetest();
 	return 0;
 }

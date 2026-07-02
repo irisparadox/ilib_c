@@ -29,14 +29,27 @@ extern int que_err;
 #define QUE_DECL static inline
 #endif /* QUE_DECL */
 
+#ifndef PQ_DEL
+#define PQ_DECL static inline
+#endif /* PQ_DECL */
+
 typedef unsigned int qsize_t;
 typedef unsigned int esize_t;
 
 typedef struct {
-	void *data;
-	qsize_t front, back, size, capacity;
-	esize_t elem_size;
+	void    *data;
+	qsize_t  front, back, size, capacity;
+	esize_t  elem_size;
 } queue_t;
+
+typedef int (*pq_cmp_t)(const void *a, const void *b);
+
+typedef struct {
+	void     *heap;
+	qsize_t   size, capacity;
+	esize_t   elem_size;
+	pq_cmp_t  cmp;
+} pqueue_t;
 
 #if QUEUEF_STRERR == 1
 typedef struct {
@@ -66,6 +79,15 @@ QUE_DECL QUE_RET queue_pop(queue_t *q);
 
 #define queue_front(q, type) (*(type *)i_queue_front((q)))
 QUE_DECL int queue_empty(const queue_t *q);
+
+PQ_DECL QUE_RET pqueue_construct(pqueue_t *pq, qsize_t elem_size, pq_cmp_t cmp);
+PQ_DECL QUE_RET pqueue_destroy(pqueue_t *pq);
+PQ_DECL QUE_RET i_pqueue_push(pqueue_t *pq, const void *elem);
+#define pqueue_push(pq, type, v) i_pqueue_push((pq), &(type){(v)})
+PQ_DECL QUE_RET pqueue_pop(pqueue_t *pq);
+#define pqueue_top(pq, type) (*(type *)i_pqueue_top((pq)))
+PQ_DECL int pqueue_empty(const pqueue_t *pq);
+#endif // QUEUE_H
 
 //#define QUEUE_IMPLEMENTATION
 #ifdef QUEUE_IMPLEMENTATION
@@ -320,7 +342,211 @@ QUE_DECL int queue_empty(const queue_t *q)
 
 #endif // I_QUEUE_IMPLEMENTATION
 #endif // QUEUE_IMPLEMENTATION
-#endif // QUEUE_H
+
+//#define PQUEUE_IMPLEMENTATION
+#ifdef PQUEUE_IMPLEMENTATION
+#ifndef I_PQUE_IMPLEMENTATION
+#define I_PQUE_IMPLEMENTATION
+
+#if !((defined(PQ_MALLOC) == defined(PQ_FREE)) && (defined(PQ_FREE) == defined(PQ_REALLOC)))
+#error "You must either use the default allocator or provide all of: PQ_MALLOC, PQ_REALLOC and PQ_FREE"
+#endif
+
+#if !defined(PQ_MALLOC) || !defined(PQ_FREE) || !defined(PQ_REALLOC)
+
+#include <stdlib.h>
+
+#ifndef PQ_MALLOC
+#define PQ_MALLOC malloc
+#endif /* PQ_MALLOC */
+
+#ifndef PQ_FREE
+#define PQ_FREE free
+#endif /* PQ_FREE */
+
+#ifndef PQ_REALLOC
+#define PQ_REALLOC realloc
+#endif /* PQ_REALLOC */
+
+#endif /* !defined(PQ_MALLOC) || !defined(PQ_FREE) || !defined(PQ_REALLOC) */
+
+#if !(defined(PQ_MEMSET) == defined(PQ_MEMCPY))
+#error "You must either use the default mem ops or provide PQ_MEMSET and PQ_MEMCPY"
+#endif
+
+#if !defined(PQ_MEMSET) || !defined(PQ_MEMCPY)
+
+#include <string.h>
+
+#ifndef PQ_MEMSET
+#define PQ_MEMSET memset
+#endif /* PQ_MEMSET */
+
+#ifndef PQ_MEMCPY
+#define PQ_MEMCPY memcpy
+#endif /* PQ_MEMCPY */
+
+#endif /* !defined(PQ_MEMSET) || !defined(PQ_MEMCPY) */
+
+PQ_DECL QUE_RET pqueue_construct(pqueue_t *pq, qsize_t elem_size, pq_cmp_t cmp)
+{
+#if QUEUEF_STRERR
+	queue_err_t res = {0};
+	res.op = "pqueue_construct";
+#endif
+
+	if (!pq || elem_size == 0 || !cmp) {
+#if QUEUEF_FLAG_ERR
+		que_err = QUEINVAL;
+#endif
+
+#if QUEUEF_STRERR
+		res.code = QUEINVAL;
+		return (res);
+#else
+		return (QUEINVAL);
+#endif
+	}
+
+	pq->capacity  = 8;
+	pq->size      = 0;
+	pq->elem_size = elem_size;
+	pq->cmp	      = cmp;
+	pq->heap      = PQ_MALLOC(pq->capacity * elem_size);
+
+	if (!pq->heap) {
+#if QUEUEF_FLAG_ERR
+		que_err = QUENOMEM;
+#endif
+
+#if QUEUEF_STRERR
+		res.code = QUENOMEM;
+		res.capacity = pq->capacity;
+		return (res);
+#else
+		return (QUENOMEM);
+#endif
+	}
+
+#if QUEUEF_STRERR
+	res.capacity = pq->capacity;
+	res.size = 0;
+	res.ptr = pq->heap;
+	return (res);
+#else
+	return 0;
+#endif
+}
+
+PQ_DECL QUE_RET pqueue_destroy(pqueue_t *pq)
+{
+#if QUEUEF_STRERR
+	queue_err_t res = {0};
+	res.op = "pqueue_destroy";
+#endif
+	if (!pq) {
+#if QUEUEF_FLAG_ERR
+		que_err = QUEINVAL;
+#endif
+#if QUEUEF_STRERR
+		res.code = QUEINVAL;
+		return (res);
+#else
+		return (QUEINVAL);
+#endif
+	}
+
+	PQ_FREE(pq->heap);
+	pq->heap      = NULL;
+	pq->size      = 0;
+	pq->capacity  = 0;
+	pq->elem_size = 0;
+	pq->cmp       = NULL;
+
+#if QUEUEF_STRERR
+	res.code     = 0;
+	res.capacity = 0;
+	res.size     = 0;
+	res.ptr      = NULL;
+	return (res);
+#else
+	return 0;
+#endif
+}
+
+static void
+i_pqueue_sift_up(pqueue_t *pq, qsize_t idx)
+{
+	char *tmp = (char *)PQ_MALLOC(pq->elem_size);
+
+	while (idx > 0) {
+		qsize_t parent = (idx - 1) / 2;
+		void *child_ptr  = (char *)pq->heap + idx * pq->elem_size;
+		void *parent_ptr = (char *)pq->heap + parent * pq->elem_size;
+
+		if (pq->cmp(child_ptr, parent_ptr) >= 0) break;
+
+		PQ_MEMCPY(tmp, child_ptr, pq->elem_size);
+		PQ_MEMCPY(child_ptr, parent_ptr, pq->elem_size);
+		PQ_MEMCPY(parent_ptr, tmp, pq->elem_size);
+
+		idx = parent;
+	}
+
+	PQ_FREE(tmp);
+}
+
+PQ_DECL QUE_RET i_pqueue_push(pqueue_t *pq, const void *elem)
+{
+#if QUEUEF_STRERR
+	queue_err_t res = {0};
+	res.op = "pqueue_push";
+#endif
+	if (!pq || !elem) {
+#if QUEUEF_FLAG_ERR
+		que_err = QUEINVAL;
+#endif
+#if QUEUEF_STRERR
+		res.code = QUEINVAL;
+		return (res);
+#else
+		return (QUEINVAL);
+#endif
+	}
+
+	if (pq->size == pq->capacity) {
+		qsize_t new_cap = pq->capacity << 1;
+		void *new_heap = PQ_MALLOC(new_cap * pq->elem_size);
+#if QUEUEF_STRERR
+		if (!new_heap) {
+			res.code = QUENOMEM;
+			return (res);
+		}
+#else
+		if (!new_heap) return (QUENOMEM);
+#endif
+		PQ_MEMCPY(new_heap, pq->heap, pq->size * pq->elem_size);
+		PQ_FREE(pq->heap);
+		pq->heap = new_heap;
+		pq->capacity = new_cap;
+	}
+
+	PQ_MEMCPY((char *)pq->heap + pq->size * pq->elem_size, elem, pq->elem_size);
+	i_pqueue_sift_up(pq, pq->size);
+	pq->size++;
+
+#if QUEUEF_STRERR
+	res.capacity = pq->capacity;
+	res.size = pq->size;
+	res.ptr = pq->heap;
+	return (res);
+#else
+	return 0;
+#endif
+}
+
+#endif // I_PQUE_IMPLEMENTATION
+#endif // PQUEUE_IMPLEMENTATION
 
 /*
  * MIT License
