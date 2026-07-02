@@ -248,11 +248,11 @@ int queuetest(void)
 		return que_err;
 	}
 
-	int ret = queue_push(&q, int, 42);
+	int ret = queue_push(&q, &(int){42});
 
 	printf("%d\n", queue_front(&q, int));
 
-	ret = queue_push(&q, int, 35);
+	ret = queue_push(&q, &(int){35});
 	ret = queue_pop(&q);
 
 	printf("%d\n", queue_front(&q, int));
@@ -378,9 +378,9 @@ int pquetest(void)
 		return que_err;
 	}
 
-	pqueue_push(&pq, int, 42);
-	pqueue_push(&pq, int, 32);
-	pqueue_push(&pq, int, 30);
+	pqueue_push(&pq, &(int){42});
+	pqueue_push(&pq, &(int){32});
+	pqueue_push(&pq, &(int){30});
 
 	pqueue_pop(&pq);
 

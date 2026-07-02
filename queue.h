@@ -3,6 +3,10 @@
 #ifndef QUEUE_H
 #define QUEUE_H
 
+#ifndef QUE_XMENTAL_MACROS
+#define QUE_XMENTAL_MACROS 0
+#endif /* QUE_XMENTAL_MACROS */
+
 #ifndef QUEUEF_STRERR
 #define QUEUEF_STRERR 0
 #endif /* QUEUEF_STRERR */
@@ -107,7 +111,11 @@ QUE_DECL QUE_RET queue_construct(queue_t *q, esize_t elem_size);
 QUE_DECL QUE_RET queue_destroy(queue_t *q);
 
 // EXPERIMENTAL
-#define queue_push(q, type, v) i_queue_push((q), &(type){ (v) })
+#if QUE_XMENTAL_MACROS == 1
+#define QUEUE_PUSH(q, type, v) i_queue_push((q), &(type){ (v) })
+#else
+QUE_DECL QUE_RET queue_push(queue_t *q, void *elem);
+#endif /* QUE_XMENTAL_MACROS */
 QUE_DECL QUE_RET queue_pop(queue_t *q);
 
 #define queue_front(q, type) (*(type *)i_queue_front((q)))
@@ -117,7 +125,11 @@ PQ_DECL QUE_RET pqueue_construct(pqueue_t *pq, qsize_t elem_size, pq_cmp_t cmp);
 PQ_DECL QUE_RET pqueue_destroy(pqueue_t *pq);
 
 // EXPERIMENTAL
-#define pqueue_push(pq, type, v) i_pqueue_push((pq), &(type){ (v) })
+#if QUE_XMENTAL_MACROS == 1
+#define PQUEUE_PUSH(pq, type, v) i_pqueue_push((pq), &(type){ (v) })
+#else
+PQ_DECL QUE_RET pqueue_push(pqueue_t *pq, void *elem);
+#endif /* QUE_XMENTAL_MACROS */
 PQ_DECL QUE_RET pqueue_pop(pqueue_t *pq);
 
 #define pqueue_top(pq, type) (*(type *)i_pqueue_top((pq)))
