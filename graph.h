@@ -140,6 +140,28 @@ typedef struct {
 GRAPH_DECL graph_bfs_result_t graph_bfs_al(const graph_t *g, vertex_id_t origin);
 GRAPH_DECL graph_bfs_result_t dgraph_bfs_al(const dgraph_t *g, vertex_id_t origin);
 
+typedef struct { vertex_id_t vertex; int   dist; } pq_entry_i_t;
+typedef struct { vertex_id_t vertex; float dist; } pq_entry_f_t;
+
+typedef struct {
+	int         *dist;
+	vertex_id_t *prev;
+	char        *visited;
+	vertex_id_t  origin;
+} graph_dijkstra_i_result_t;
+
+typedef struct {
+	float       *dist;
+	vertex_id_t *prev;
+	char        *visited;
+	vertex_id_t  origin;
+} graph_dijkstra_f_result_t;
+
+GRAPH_DECL graph_dijkstra_i_result_t wigraph_dijkstra_al(const wigraph_t *g, vertex_id_t origin);
+GRAPH_DECL graph_dijkstra_i_result_t widgraph_dijkstra_al(const widgraph_t *g, vertex_id_t origin);
+GRAPH_DECL graph_dijkstra_f_result_t wfgraph_dijkstra_al(const wfgraph_t *g, vertex_id_t origin);
+GRAPH_DECL graph_dijkstra_f_result_t wfdgraph_dijkstra_al(const wfdgraph_t *g, vertex_id_t origin);
+
 #endif // GRAPH_H
 
 //#define GRAPH_IMPLEMENTATION
@@ -148,6 +170,9 @@ GRAPH_DECL graph_bfs_result_t dgraph_bfs_al(const dgraph_t *g, vertex_id_t origi
 #define I_GRAPH_IMPLEMENTATION
 
 #ifndef QUEUE_IMPLEMENTATION
+#ifndef PQUEUE_IMPLEMENTATION
+#define PQUEUE_IMPLEMENTATION
+#endif /* PQUEUE_IMPLEMENTATION */
 #define QUEUE_IMPLEMENTATION
 #include "queue.h"
 #endif
@@ -548,7 +573,7 @@ i_bfs_core(const vertex_id_t *offsets, const vertex_id_t *edges, graph_size_t ve
 	result.visited[origin] = 1;
 	result.dist[origin]    = 0;
 
-	queue_push(&q, vertex_id_t, origin);
+	i_queue_push(&q, &origin);
 
 	while (!queue_empty(&q)) {
 		vertex_id_t v = queue_front(&q, vertex_id_t); queue_pop(&q);
@@ -560,7 +585,7 @@ i_bfs_core(const vertex_id_t *offsets, const vertex_id_t *edges, graph_size_t ve
 				result.visited[neighbor] = 1;
 				result.prev[neighbor]	 = v;
 				result.dist[neighbor]	 = result.dist[v] + 1;
-				queue_push(&q, vertex_id_t, neighbor);
+				i_queue_push(&q, &neighbor);
 			}
 		}
 	}
@@ -575,6 +600,140 @@ GRAPH_DECL graph_bfs_result_t name(const type *g, vertex_id_t origin) \
 
 GRAPH_DEFINE_BFS(graph_bfs_al, graph_t)
 GRAPH_DEFINE_BFS(dgraph_bfs_al, dgraph_t)
+
+PQ_DEFINE_CMP_FIELD_ASC(pq_cmp_entry_i_asc, pq_entry_i_t, dist)
+PQ_DEFINE_CMP_FIELD_ASC(pq_cmp_entry_f_asc, pq_entry_f_t, dist)
+
+#define I_DIJKSTRA_INT_INF ((int)0x7fffffff)
+#define I_DIJKSTRA_FLT_INF (3.402823466e+38f)
+
+static graph_dijkstra_i_result_t
+i_dijkstra_i_core(const vertex_id_t *offsets, const vertex_id_t *edges, const int *weights,
+                   graph_size_t vertex_count, vertex_id_t origin)
+{
+	graph_dijkstra_i_result_t result;
+	pqueue_t pq;
+	graph_size_t i;
+
+	result.dist    = (int *)GRAPH_MALLOC(vertex_count * sizeof(int));
+	result.prev    = (vertex_id_t *)GRAPH_MALLOC(vertex_count * sizeof(vertex_id_t));
+	result.visited = (char *)GRAPH_MALLOC(vertex_count * sizeof(char));
+	result.origin  = origin;
+
+	for (i = 0; i < vertex_count; i++) {
+		result.dist[i]    = I_DIJKSTRA_INT_INF;
+		result.prev[i]    = I_VTX_UNVISITED;
+		result.visited[i] = 0;
+	}
+	result.dist[origin] = 0;
+
+	pqueue_construct(&pq, sizeof(pq_entry_i_t), pq_cmp_entry_i_asc);
+	{
+		pq_entry_i_t entry = { .vertex = origin, .dist = 0 };
+		i_pqueue_push(&pq, &entry);
+	}
+
+	while (!pqueue_empty(&pq)) {
+		pq_entry_i_t top = pqueue_top(&pq, pq_entry_i_t);
+		vertex_id_t u = top.vertex;
+		vertex_id_t j;
+
+		pqueue_pop(&pq);
+
+		if (result.visited[u]) {
+			continue; /* stale entry, a better path was already finalized */
+		}
+		result.visited[u] = 1;
+
+		for (j = offsets[u]; j < offsets[u + 1]; j++) {
+			vertex_id_t v = edges[j];
+			int w = weights[j];
+			int alt = result.dist[u] + w;
+
+			if (!result.visited[v] && alt < result.dist[v]) {
+				result.dist[v] = alt;
+				result.prev[v] = u;
+				{
+					pq_entry_i_t entry = { .vertex = v, .dist = alt };
+					i_pqueue_push(&pq, &entry);
+				}
+			}
+		}
+	}
+
+	pqueue_destroy(&pq);
+	return result;
+}
+
+static graph_dijkstra_f_result_t
+i_dijkstra_f_core(const vertex_id_t *offsets, const vertex_id_t *edges, const float *weights,
+                   graph_size_t vertex_count, vertex_id_t origin)
+{
+	graph_dijkstra_f_result_t result;
+	pqueue_t pq;
+	pq_entry_f_t entry;
+	graph_size_t i;
+
+	result.dist    = (float *)GRAPH_MALLOC(vertex_count * sizeof(float));
+	result.prev    = (vertex_id_t *)GRAPH_MALLOC(vertex_count * sizeof(vertex_id_t));
+	result.visited = (char *)GRAPH_MALLOC(vertex_count * sizeof(char));
+	result.origin  = origin;
+
+	for (i = 0; i < vertex_count; i++) {
+		result.dist[i]    = I_DIJKSTRA_FLT_INF;
+		result.prev[i]    = I_VTX_UNVISITED;
+		result.visited[i] = 0;
+	}
+	result.dist[origin] = 0.0f;
+
+	pqueue_construct(&pq, sizeof(pq_entry_f_t), pq_cmp_entry_f_asc);
+
+	entry.vertex = origin;
+	entry.dist   = 0.0f;
+	i_pqueue_push(&pq, &entry);
+
+	while (!pqueue_empty(&pq)) {
+		pq_entry_f_t top = pqueue_top(&pq, pq_entry_f_t);
+		vertex_id_t u = top.vertex;
+		vertex_id_t j;
+
+		pqueue_pop(&pq);
+
+		if (result.visited[u]) {
+			continue;
+		}
+		result.visited[u] = 1;
+
+		for (j = offsets[u]; j < offsets[u + 1]; j++) {
+			vertex_id_t v = edges[j];
+			float w = weights[j];
+			float alt = result.dist[u] + w;
+
+			if (!result.visited[v] && alt < result.dist[v]) {
+				result.dist[v] = alt;
+				result.prev[v] = u;
+				entry.vertex = v;
+				entry.dist   = alt;
+				i_pqueue_push(&pq, &entry);
+			}
+		}
+	}
+
+	pqueue_destroy(&pq);
+	return result;
+}
+
+GRAPH_DECL graph_dijkstra_i_result_t wigraph_dijkstra_al(const wigraph_t *g, vertex_id_t origin)
+{ return i_dijkstra_i_core(g->offsets, g->edges, g->weights, g->vertex_count, origin); }
+
+GRAPH_DECL graph_dijkstra_i_result_t widgraph_dijkstra_al(const widgraph_t *g, vertex_id_t origin)
+{ return i_dijkstra_i_core(g->offsets, g->edges, g->weights, g->vertex_count, origin); }
+
+GRAPH_DECL graph_dijkstra_f_result_t wfgraph_dijkstra_al(const wfgraph_t *g, vertex_id_t origin)
+{ return i_dijkstra_f_core(g->offsets, g->edges, g->weights, g->vertex_count, origin); }
+
+GRAPH_DECL graph_dijkstra_f_result_t wfdgraph_dijkstra_al(const wfdgraph_t *g, vertex_id_t origin)
+{ return i_dijkstra_f_core(g->offsets, g->edges, g->weights, g->vertex_count, origin); }
 
 #endif // I_GRAPH_IMPLEMENTATION
 #endif // GRAPH_IMPLEMENTATION

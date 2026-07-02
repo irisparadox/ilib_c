@@ -367,16 +367,24 @@ void bfstest(void)
 	bfstest_directed();
 }
 
-static inline int pq_cmp_int_asc(const void *a, const void *b)
-{ return (*(const int *)a > *(const int *)b) - (*(const int *)a < *(const int *)b); }
+PQ_DEFINE_CMP_DESC(cmp, int)
 
 int pquetest(void)
 {
 	pqueue_t pq;
-	if (pqueue_construct(&pq, sizeof(int), pq_cmp_int_asc) != 0) {
+	
+	if (pqueue_construct(&pq, sizeof(int), cmp) != 0) {
 		printf("Error on pqueue_construct(): %u\n", que_err);
 		return que_err;
 	}
+
+	pqueue_push(&pq, int, 42);
+	pqueue_push(&pq, int, 32);
+	pqueue_push(&pq, int, 30);
+
+	pqueue_pop(&pq);
+
+	printf("pq top: %d\n", pqueue_top(&pq, int));
 
 	if (pqueue_destroy(&pq) != 0) {
 		printf("Error on pqueue_destroy(): %u\n", que_err);
@@ -386,8 +394,82 @@ int pquetest(void)
 	return 0;
 }
 
+void dijkstratest(void)
+{
+	/* Weighted undirected graph (0-indexed):
+	 *   0 -1(w4)- 1
+	 *   0 -1(w1)- 2
+	 *   2 -1(w2)- 1
+	 *   1 -1(w1)- 3
+	 *   2 -1(w5)- 3
+	 *   3 -1(w3)- 4
+	 * vertex_count = 5, edge_count = 6
+	 *
+	 * Expected shortest paths from origin 0:
+	 *   dist[0] = 0
+	 *   dist[2] = 1   (0->2)
+	 *   dist[1] = 3   (0->2->1, 1+2=3, beats direct 0->1=4)
+	 *   dist[3] = 4   (0->2->1->3, 3+1=4)
+	 *   dist[4] = 7   (0->2->1->3->4, 4+3=7)
+	 */
+	wedgei_t edges_i[] = {
+		{0, 1, 4},
+		{0, 2, 1},
+		{2, 1, 2},
+		{1, 3, 1},
+		{2, 3, 5},
+		{3, 4, 3},
+	};
+	wedgef_t edges_f[] = {
+		{0, 1, 4.0f},
+		{0, 2, 1.0f},
+		{2, 1, 2.0f},
+		{1, 3, 1.0f},
+		{2, 3, 5.0f},
+		{3, 4, 3.0f},
+	};
+	graph_size_t edge_count   = 6;
+	graph_size_t vertex_count = 5;
+
+	wigraph_t gi;
+	wfgraph_t gf;
+	graph_dijkstra_i_result_t ri;
+	graph_dijkstra_f_result_t rf;
+	graph_size_t i;
+
+	wigraph_construct(&gi, edges_i, vertex_count, edge_count);
+	ri = wigraph_dijkstra_al(&gi, 0);
+
+	printf("[wigraph_t Dijkstra] origin: %u\n", ri.origin);
+	printf("dist: ");
+	for (i = 0; i < vertex_count; i++) printf("%d ", ri.dist[i]);
+	printf("\nprev: ");
+	for (i = 0; i < vertex_count; i++) printf("%u ", ri.prev[i]);
+	printf("\n");
+
+	free(ri.dist);
+	free(ri.prev);
+	free(ri.visited);
+	wigraph_destroy(&gi);
+
+	wfgraph_construct(&gf, edges_f, vertex_count, edge_count);
+	rf = wfgraph_dijkstra_al(&gf, 0);
+
+	printf("[wfgraph_t Dijkstra] origin: %u\n", rf.origin);
+	printf("dist: ");
+	for (i = 0; i < vertex_count; i++) printf("%.2f ", rf.dist[i]);
+	printf("\nprev: ");
+	for (i = 0; i < vertex_count; i++) printf("%u ", rf.prev[i]);
+	printf("\n");
+
+	free(rf.dist);
+	free(rf.prev);
+	free(rf.visited);
+	wfgraph_destroy(&gf);
+}
+
 int main(void)
 {
-	pquetest();
+	dijkstratest();
 	return 0;
 }

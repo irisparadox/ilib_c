@@ -51,6 +51,38 @@ typedef struct {
 	pq_cmp_t  cmp;
 } pqueue_t;
 
+// MACRO HELPER FOR TYPE ASCENDING COMPARATOR FUNCTION
+#define PQ_DEFINE_CMP_ASC(name, T) \
+static inline int name(const void *a, const void *b) \
+{ \
+	T va = *(const T *)a, vb = *(const T *)b; \
+	return (va > vb) - (va < vb); \
+}
+
+// MACRO HELPER FOR TYPE DESCENDING COMPARATOR FUNCTION
+#define PQ_DEFINE_CMP_DESC(name, T) \
+static inline int name(const void *a, const void *b) \
+{ \
+	T va = *(const T *)a, vb = *(const T *)b; \
+	return (vb > va) - (vb < va); \
+}
+
+// MACRO HELPER FOR STRUCT FIELD ASCENDING COMPARATOR FUNCTION
+#define PQ_DEFINE_CMP_FIELD_ASC(name, StructT, field) \
+static inline int name(const void *a, const void *b) \
+{ \
+	StructT sa = *(const StructT *)a, sb = *(const StructT *)b; \
+	return (sa.field > sb.field) - (sa.field < sb.field); \
+}
+
+// MACRO HELPER FOR STRUCT FIELD DESCENDING COMPARATOR FUNCTION
+#define PQ_DEFINE_CMP_FIELD_DESC(name, StructT, field) \
+static inline int name(const void *a, const void *b) \
+{ \
+	StructT sa = *(const StructT *)a, sb = *(const StructT *)b; \
+	return (sb.field > sa.field) - (sb.field < sa.field); \
+}
+
 #if QUEUEF_STRERR == 1
 typedef struct {
 	int code;
@@ -74,6 +106,7 @@ typedef int que_ret_t;
 QUE_DECL QUE_RET queue_construct(queue_t *q, esize_t elem_size);
 QUE_DECL QUE_RET queue_destroy(queue_t *q);
 
+// EXPERIMENTAL
 #define queue_push(q, type, v) i_queue_push((q), &(type){ (v) })
 QUE_DECL QUE_RET queue_pop(queue_t *q);
 
@@ -82,9 +115,11 @@ QUE_DECL int queue_empty(const queue_t *q);
 
 PQ_DECL QUE_RET pqueue_construct(pqueue_t *pq, qsize_t elem_size, pq_cmp_t cmp);
 PQ_DECL QUE_RET pqueue_destroy(pqueue_t *pq);
-PQ_DECL QUE_RET i_pqueue_push(pqueue_t *pq, const void *elem);
-#define pqueue_push(pq, type, v) i_pqueue_push((pq), &(type){(v)})
+
+// EXPERIMENTAL
+#define pqueue_push(pq, type, v) i_pqueue_push((pq), &(type){ (v) })
 PQ_DECL QUE_RET pqueue_pop(pqueue_t *pq);
+
 #define pqueue_top(pq, type) (*(type *)i_pqueue_top((pq)))
 PQ_DECL int pqueue_empty(const pqueue_t *pq);
 #endif // QUEUE_H
@@ -496,6 +531,49 @@ i_pqueue_sift_up(pqueue_t *pq, qsize_t idx)
 	PQ_FREE(tmp);
 }
 
+static void
+i_pqueue_sift_down(pqueue_t *pq, qsize_t idx)
+{
+	char *tmp = (char *)PQ_MALLOC(pq->elem_size);
+
+	for (;;) {
+		qsize_t left  = 2 * idx + 1;
+		qsize_t right = 2 * idx + 2;
+		qsize_t best  = idx;
+
+		void *best_ptr = (char *)pq->heap + best * pq->elem_size;
+
+		if (left < pq->size) {
+			void *left_ptr = (char *)pq->heap + left * pq->elem_size;
+			if (pq->cmp(left_ptr, best_ptr) < 0) {
+				best = left;
+				best_ptr = left_ptr;
+			}
+		}
+
+		if (right < pq->size) {
+			void *right_ptr = (char *)pq->heap + right * pq->elem_size;
+			if (pq->cmp(right_ptr, best_ptr) < 0) {
+				best = right;
+				best_ptr = right_ptr;
+			}
+		}
+
+		if (best == idx) break;
+
+		{
+			void *idx_ptr = (char *)pq->heap + idx * pq->elem_size;
+			PQ_MEMCPY(tmp, idx_ptr, pq->elem_size);
+			PQ_MEMCPY(idx_ptr, best_ptr, pq->elem_size);
+			PQ_MEMCPY(best_ptr, tmp, pq->elem_size);
+		}
+
+		idx = best;
+	}
+
+	PQ_FREE(tmp);
+}
+
 PQ_DECL QUE_RET i_pqueue_push(pqueue_t *pq, const void *elem)
 {
 #if QUEUEF_STRERR
@@ -543,6 +621,59 @@ PQ_DECL QUE_RET i_pqueue_push(pqueue_t *pq, const void *elem)
 #else
 	return 0;
 #endif
+}
+
+PQ_DECL QUE_RET pqueue_pop(pqueue_t *pq)
+{
+#if QUEUEF_STRERR
+	queue_err_t res = {0};
+	res.op = "pqueue_pop";
+#endif
+	if (!pq || !pq->heap || pq->size == 0) {
+#if QUEUEF_FLAG_ERR
+		que_err = QUEINVAL;
+#endif
+#if QUEUEF_STRERR
+		res.code = QUEINVAL;
+		return (res);
+#else
+		return (QUEINVAL);
+#endif
+	}
+
+	pq->size--;
+	if (pq->size > 0) {
+		PQ_MEMCPY(pq->heap,
+		          (char *)pq->heap + pq->size * pq->elem_size,
+		          pq->elem_size);
+		i_pqueue_sift_down(pq, 0);
+	}
+
+#if QUEUEF_STRERR
+	res.size = pq->size;
+	res.capacity = pq->capacity;
+	res.ptr = pq->heap;
+	return (res);
+#else
+	return 0;
+#endif
+}
+
+PQ_DECL void *i_pqueue_top(const pqueue_t *pq)
+{
+	if (!pq || !pq->heap || pq->size == 0) {
+#if QUEUEF_FLAG_ERR
+		que_err = QUEINVAL;
+#endif
+		return NULL;
+	}
+
+	return (char *)pq->heap;
+}
+
+PQ_DECL int pqueue_empty(const pqueue_t *pq)
+{
+	return !pq || !pq->heap || pq->size == 0;
 }
 
 #endif // I_PQUE_IMPLEMENTATION
