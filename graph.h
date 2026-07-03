@@ -766,7 +766,7 @@ GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g)
 		if (!dset_joined(&ds, u, v)) {
 			dset_join(&ds, u, v);
 			result.span_weight += e.weight;
-			result.MST[result.mst_size++] = (wedgei_t){ .from = e.from, .to = e.to, .weight = e.weight };
+			result.MST[result.mst_size++] = e;
 			if (result.mst_size == g->vertex_count - 1) break;
 		}
 	}
@@ -814,7 +814,7 @@ GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g)
 		if (!dset_joined(&ds, u, v)) {
 			dset_join(&ds, u, v);
 			result.span_weight += e.weight;
-			result.MST[result.mst_size++] = (wedgef_t){ .from = e.from, .to = e.to, .weight = e.weight };
+			result.MST[result.mst_size++] = e;
 			if (result.mst_size == g->vertex_count - 1) break;
 		}
 	}
