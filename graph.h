@@ -614,53 +614,38 @@ i_dijkstra_i_core(const vertex_id_t *offsets, const vertex_id_t *edges, const in
 	graph_dijkstra_i_result_t result;
 	pqueue_t pq;
 	graph_size_t i;
-
 	result.dist    = (int *)GRAPH_MALLOC(vertex_count * sizeof(int));
 	result.prev    = (vertex_id_t *)GRAPH_MALLOC(vertex_count * sizeof(vertex_id_t));
 	result.visited = (char *)GRAPH_MALLOC(vertex_count * sizeof(char));
 	result.origin  = origin;
-
 	for (i = 0; i < vertex_count; i++) {
 		result.dist[i]    = I_DIJKSTRA_INT_INF;
 		result.prev[i]    = I_VTX_UNVISITED;
 		result.visited[i] = 0;
 	}
 	result.dist[origin] = 0;
-
 	pqueue_construct(&pq, sizeof(pq_entry_i_t), pq_cmp_entry_i_asc);
-	{
-		pq_entry_i_t entry = { .vertex = origin, .dist = 0 };
-		i_pqueue_push(&pq, &entry);
-	}
-
+	pqueue_push(&pq, &(pq_entry_i_t){ .vertex = origin, .dist = 0 });
 	while (!pqueue_empty(&pq)) {
 		pq_entry_i_t top = pqueue_top(&pq, pq_entry_i_t);
 		vertex_id_t u = top.vertex;
 		vertex_id_t j;
-
 		pqueue_pop(&pq);
-
 		if (result.visited[u]) {
 			continue; /* stale entry, a better path was already finalized */
 		}
 		result.visited[u] = 1;
-
 		for (j = offsets[u]; j < offsets[u + 1]; j++) {
 			vertex_id_t v = edges[j];
 			int w = weights[j];
 			int alt = result.dist[u] + w;
-
 			if (!result.visited[v] && alt < result.dist[v]) {
 				result.dist[v] = alt;
 				result.prev[v] = u;
-				{
-					pq_entry_i_t entry = { .vertex = v, .dist = alt };
-					i_pqueue_push(&pq, &entry);
-				}
+				pqueue_push(&pq, &(pq_entry_i_t){ .vertex = v, .dist = alt });
 			}
 		}
 	}
-
 	pqueue_destroy(&pq);
 	return result;
 }
@@ -671,54 +656,39 @@ i_dijkstra_f_core(const vertex_id_t *offsets, const vertex_id_t *edges, const fl
 {
 	graph_dijkstra_f_result_t result;
 	pqueue_t pq;
-	pq_entry_f_t entry;
 	graph_size_t i;
-
 	result.dist    = (float *)GRAPH_MALLOC(vertex_count * sizeof(float));
 	result.prev    = (vertex_id_t *)GRAPH_MALLOC(vertex_count * sizeof(vertex_id_t));
 	result.visited = (char *)GRAPH_MALLOC(vertex_count * sizeof(char));
 	result.origin  = origin;
-
 	for (i = 0; i < vertex_count; i++) {
 		result.dist[i]    = I_DIJKSTRA_FLT_INF;
 		result.prev[i]    = I_VTX_UNVISITED;
 		result.visited[i] = 0;
 	}
 	result.dist[origin] = 0.0f;
-
 	pqueue_construct(&pq, sizeof(pq_entry_f_t), pq_cmp_entry_f_asc);
-
-	entry.vertex = origin;
-	entry.dist   = 0.0f;
-	i_pqueue_push(&pq, &entry);
-
+	pqueue_push(&pq, &(pq_entry_f_t){ .vertex = origin, .dist = 0.0f });
 	while (!pqueue_empty(&pq)) {
 		pq_entry_f_t top = pqueue_top(&pq, pq_entry_f_t);
 		vertex_id_t u = top.vertex;
 		vertex_id_t j;
-
 		pqueue_pop(&pq);
-
 		if (result.visited[u]) {
 			continue;
 		}
 		result.visited[u] = 1;
-
 		for (j = offsets[u]; j < offsets[u + 1]; j++) {
 			vertex_id_t v = edges[j];
 			float w = weights[j];
 			float alt = result.dist[u] + w;
-
 			if (!result.visited[v] && alt < result.dist[v]) {
 				result.dist[v] = alt;
 				result.prev[v] = u;
-				entry.vertex = v;
-				entry.dist   = alt;
-				i_pqueue_push(&pq, &entry);
+				pqueue_push(&pq, &(pq_entry_f_t){ .vertex = v, .dist = alt });
 			}
 		}
 	}
-
 	pqueue_destroy(&pq);
 	return result;
 }
