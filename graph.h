@@ -163,11 +163,15 @@ GRAPH_DECL graph_dijkstra_f_result_t wfgraph_dijkstra_al(const wfgraph_t *g, ver
 GRAPH_DECL graph_dijkstra_f_result_t wfdgraph_dijkstra_al(const wfdgraph_t *g, vertex_id_t origin);
 
 typedef struct {
-	int span_weight;
+	int           span_weight;
+	wedgei_t     *MST;
+	graph_size_t  mst_size;
 } graph_kruskal_i_result_t;
 
 typedef struct {
-	float span_weight;
+	float         span_weight;
+	wedgef_t     *MST;
+	graph_size_t  mst_size;
 } graph_kruskal_f_result_t;
 
 GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g);
@@ -753,7 +757,8 @@ GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g)
 	dset_construct(&ds, g->vertex_count);
 
 	graph_kruskal_i_result_t result = {0};
-	graph_size_t span_size = 0;
+
+	result.MST = (wedgei_t *)GRAPH_MALLOC((g->vertex_count - 1) * sizeof(wedgei_t));
 
 	while (!pqueue_empty(&pq)) {
 		e = pqueue_top(&pq, wedgei_t); pqueue_pop(&pq);
@@ -761,7 +766,8 @@ GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g)
 		if (!dset_joined(&ds, u, v)) {
 			dset_join(&ds, u, v);
 			result.span_weight += e.weight;
-			if (++span_size == g->vertex_count - 1) break;
+			result.MST[result.mst_size++] = (wedgei_t){ .from = e.from, .to = e.to, .weight = e.weight };
+			if (result.mst_size == g->vertex_count - 1) break;
 		}
 	}
 
@@ -799,7 +805,8 @@ GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g)
 	dset_construct(&ds, g->vertex_count);
 
 	graph_kruskal_f_result_t result = {0};
-	graph_size_t span_size = 0;
+
+	result.MST = (wedgef_t *)GRAPH_MALLOC((g->vertex_count - 1) * sizeof(wedgef_t));
 
 	while (!pqueue_empty(&pq)) {
 		e = pqueue_top(&pq, wedgef_t); pqueue_pop(&pq);
@@ -807,7 +814,8 @@ GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g)
 		if (!dset_joined(&ds, u, v)) {
 			dset_join(&ds, u, v);
 			result.span_weight += e.weight;
-			if (++span_size == g->vertex_count - 1) break;
+			result.MST[result.mst_size++] = (wedgef_t){ .from = e.from, .to = e.to, .weight = e.weight };
+			if (result.mst_size == g->vertex_count - 1) break;
 		}
 	}
 

@@ -512,6 +512,8 @@ void kruskaltest(void)
 	graph_kruskal_i_result_t ri;
 	graph_kruskal_f_result_t rf;
 
+	graph_size_t i;
+
 	wigraph_construct(&gi, edges_i, vertex_count, edge_count);
 	wfgraph_construct(&gf, edges_f, vertex_count, edge_count);
 
@@ -520,9 +522,17 @@ void kruskaltest(void)
 
 	printf("[wigraph_t Kruskal] span_weight: %d (expected 7)\n",
 		ri.span_weight);
+	printf("[wigraph_t Kruskal] mst:");
+	for (i = 0; i < ri.mst_size; ++i) printf(" [%d->%d, %d]", ri.MST[i].from, ri.MST[i].to, ri.MST[i].weight);
+	printf("\n");
 	printf("[wfgraph_t Kruskal] span_weight: %.1f (expected 8.5)\n",
 		rf.span_weight);
+	printf("[wfgraph_t Kruskal] mst:");
+	for (i = 0; i < rf.mst_size; ++i) printf(" [%d->%d, %.1f]", rf.MST[i].from, rf.MST[i].to, rf.MST[i].weight);
+	printf("\n");
 
+	free(ri.MST);
+	free(rf.MST);
 	wigraph_destroy(&gi);
 	wfgraph_destroy(&gf);
 }
