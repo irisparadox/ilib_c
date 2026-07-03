@@ -1,5 +1,61 @@
 /* SPDX-License-Identifier: MIT */
 
+/*
+ * queue.h -- single-header ring-buffer queue and binary-heap
+ *            priority queue
+ *
+ * Two independent data structures, each with its own implementation guard:
+ *
+ *     queue_t   - fixed-growth circular-buffer FIFO queue
+ *     pqueue_t  - binary min-heap priority queue (comparator-driven)
+ *
+ * Usage:
+ *     #define QUEUE_IMPLEMENTATION
+ *     #include "queue.h"
+ *
+ *     #define PQUEUE_IMPLEMENTATION
+ *     #include "queue.h"
+ *
+ * CONFIGURATION
+ *     QUEUEF_STRERR       0/1  Return a queue_err_t (rich error info) from
+ *                              every op instead of a plain int code.
+ *                              (default 0)
+ *     QUEUEF_FLAG_ERR     0/1  Set the global `que_err` variable on failure.
+ *                              Defaults to 1, unless QUEUEF_STRERR is 1.
+ *     QUE_XMENTAL_MACROS  0/1  Enable experimental QUEUE_PUSH / PQUEUE_PUSH
+ *                              compound-literal push macros. (default 0)
+ *     QUE_DECL, PQ_DECL        Linkage/inline specifier for declarations.
+ *                              (default: static inline)
+ *     QUE_MALLOC/QUE_FREE/QUE_REALLOC   Custom allocator for queue_t.
+ *     PQ_MALLOC/PQ_FREE/PQ_REALLOC      Custom allocator for pqueue_t.
+ *     QUE_MEMSET/QUE_MEMCPY             Custom mem ops for queue_t.
+ *     PQ_MEMSET/PQ_MEMCPY               Custom mem ops for pqueue_t.
+ *
+ * FUNCTIONS
+ *     queue_construct    Initialize a queue_t for elements of elem_size bytes.
+ *     queue_destroy      Free all memory owned by a queue_t.
+ *     queue_push         Push a copy of elem onto the back of the queue.
+ *     queue_pop          Pop the element at the front of the queue.
+ *     queue_front        (macro) Access the front element as `type`.
+ *     queue_empty        Return whether the queue holds zero elements.
+ *
+ *     pqueue_construct   Initialize a pqueue_t of elem_size bytes using cmp
+ *                        as the ordering comparator.
+ *     pqueue_destroy     Free all memory owned by a pqueue_t.
+ *     pqueue_push        Push a copy of elem into the heap.
+ *     pqueue_pop         Remove the top (highest-priority) element.
+ *     pqueue_top         (macro) Access the top element as `type`.
+ *     pqueue_empty       Return whether the heap holds zero elements.
+ *
+ *     PQ_DEFINE_CMP_ASC / PQ_DEFINE_CMP_DESC
+ *         Generate a comparator for a plain scalar type, ascending
+ *         or descending.
+ *
+ *     PQ_DEFINE_CMP_FIELD_ASC / PQ_DEFINE_CMP_FIELD_DESC
+ *         Generate a comparator that orders structs by one field,
+ *         ascending or descending.
+ */
+
 #ifndef QUEUE_H
 #define QUEUE_H
 
@@ -33,7 +89,7 @@ extern int que_err;
 #define QUE_DECL static inline
 #endif /* QUE_DECL */
 
-#ifndef PQ_DEL
+#ifndef PQ_DECL
 #define PQ_DECL static inline
 #endif /* PQ_DECL */
 
