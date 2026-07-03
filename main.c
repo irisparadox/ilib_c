@@ -468,8 +468,67 @@ void dijkstratest(void)
 	wfgraph_destroy(&gf);
 }
 
+void kruskaltest(void)
+{
+	/* Same weighted undirected graph as dijkstratest.
+	 * Expected MST (Kruskal, sorted by weight):
+	 *   (0,2,w1) join {0,2}
+	 *   (1,3,w1) join {1,3}
+	 *   (2,1,w2) join {0,2,1,3}
+	 *   (3,4,w3) join {0,1,2,3,4}  <- span_size == vertex_count - 1, stop
+	 * Expected span_weight = 1 + 1 + 2 + 3 = 7
+	 */
+	wedgei_t edges_i[] = {
+		{0, 1, 4},
+		{0, 2, 1},
+		{2, 1, 2},
+		{1, 3, 1},
+		{2, 3, 5},
+		{3, 4, 3},
+	};
+
+	/* Expected MST (Kruskal, sorted by weight):
+	*   (0,2,w1.2) join {0,2}
+	*   (1,3,w1.8) join {1,3}
+	*   (2,1,w2.4) join {0,2,1,3}
+	*   (3,4,w3.1) join {0,1,2,3,4}
+	* Expected span_weight = 1.2 + 1.8 + 2.4 + 3.1 = 8.5
+	*/
+	wedgef_t edges_f[] = {
+		{0, 1, 4.7f},
+		{0, 2, 1.2f},
+		{2, 1, 2.4f},
+		{1, 3, 1.8f},
+		{2, 3, 5.6f},
+		{3, 4, 3.1f},
+	};
+
+	graph_size_t edge_count   = 6;
+	graph_size_t vertex_count = 5;
+
+	wigraph_t gi;
+	wfgraph_t gf;
+
+	graph_kruskal_i_result_t ri;
+	graph_kruskal_f_result_t rf;
+
+	wigraph_construct(&gi, edges_i, vertex_count, edge_count);
+	wfgraph_construct(&gf, edges_f, vertex_count, edge_count);
+
+	ri = wigraph_kruskal_al(&gi);
+	rf = wfgraph_kruskal_al(&gf);
+
+	printf("[wigraph_t Kruskal] span_weight: %d (expected 7)\n",
+		ri.span_weight);
+	printf("[wfgraph_t Kruskal] span_weight: %.1f (expected 8.5)\n",
+		rf.span_weight);
+
+	wigraph_destroy(&gi);
+	wfgraph_destroy(&gf);
+}
+
 int main(void)
 {
-	dijkstratest();
+	kruskaltest();
 	return 0;
 }

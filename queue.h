@@ -1,8 +1,8 @@
-/* SPDX-License-Identifier: MIT */
-
 /*
  * queue.h -- single-header ring-buffer queue and binary-heap
  *            priority queue
+ *
+ * SPDX-License-Identifier: MIT
  *
  * Two independent data structures, each with its own implementation guard:
  *

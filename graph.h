@@ -162,6 +162,17 @@ GRAPH_DECL graph_dijkstra_i_result_t widgraph_dijkstra_al(const widgraph_t *g, v
 GRAPH_DECL graph_dijkstra_f_result_t wfgraph_dijkstra_al(const wfgraph_t *g, vertex_id_t origin);
 GRAPH_DECL graph_dijkstra_f_result_t wfdgraph_dijkstra_al(const wfdgraph_t *g, vertex_id_t origin);
 
+typedef struct {
+	int span_weight;
+} graph_kruskal_i_result_t;
+
+typedef struct {
+	float span_weight;
+} graph_kruskal_f_result_t;
+
+GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g);
+GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g);
+
 #endif // GRAPH_H
 
 //#define GRAPH_IMPLEMENTATION
@@ -704,6 +715,107 @@ GRAPH_DECL graph_dijkstra_f_result_t wfgraph_dijkstra_al(const wfgraph_t *g, ver
 
 GRAPH_DECL graph_dijkstra_f_result_t wfdgraph_dijkstra_al(const wfdgraph_t *g, vertex_id_t origin)
 { return i_dijkstra_f_core(g->offsets, g->edges, g->weights, g->vertex_count, origin); }
+
+#ifndef DSUF_IMPLEMENTATION
+#define DSUF_IMPLEMENTATION
+
+#include "dsetuf.h"
+#endif /* DSUF_IMPLEMENTATION */
+
+PQ_DEFINE_CMP_FIELD_ASC(kruskal_cmpi, wedgei_t, weight);
+PQ_DEFINE_CMP_FIELD_ASC(kruskal_cmpf, wedgef_t, weight);
+
+GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g)
+{
+	pqueue_t     pq;
+	vertex_id_t  u;
+	vertex_id_t  v;
+	vertex_id_t  i;
+	wedgei_t     e;
+
+	pqueue_construct(&pq, sizeof(wedgei_t), kruskal_cmpi);
+
+	for (u = 0; u < g->vertex_count; ++u) {
+		for (i = g->offsets[u]; i < g->offsets[u + 1]; ++i) {
+			v = g->edges[i];
+
+			if (v > u) {
+				e.from   = u;
+				e.to     = v;
+				e.weight = g->weights[i];
+
+				pqueue_push(&pq, &e);
+			}
+		}
+	}
+
+	disjoint_set_t ds;
+	dset_construct(&ds, g->vertex_count);
+
+	graph_kruskal_i_result_t result = {0};
+	graph_size_t span_size = 0;
+
+	while (!pqueue_empty(&pq)) {
+		e = pqueue_top(&pq, wedgei_t); pqueue_pop(&pq);
+		u = e.from; v = e.to;
+		if (!dset_joined(&ds, u, v)) {
+			dset_join(&ds, u, v);
+			result.span_weight += e.weight;
+			if (++span_size == g->vertex_count - 1) break;
+		}
+	}
+
+	pqueue_destroy(&pq);
+	dset_destroy(&ds);
+
+	return result;
+}
+
+GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g)
+{
+	pqueue_t     pq;
+	vertex_id_t  u;
+	vertex_id_t  v;
+	vertex_id_t  i;
+	wedgef_t     e;
+
+	pqueue_construct(&pq, sizeof(wedgef_t), kruskal_cmpf);
+
+	for (u = 0; u < g->vertex_count; ++u) {
+		for (i = g->offsets[u]; i < g->offsets[u + 1]; ++i) {
+			v = g->edges[i];
+
+			if (v > u) {
+				e.from   = u;
+				e.to     = v;
+				e.weight = g->weights[i];
+
+				pqueue_push(&pq, &e);
+			}
+		}
+	}
+
+	disjoint_set_t ds;
+	dset_construct(&ds, g->vertex_count);
+
+	graph_kruskal_f_result_t result = {0};
+	graph_size_t span_size = 0;
+
+	while (!pqueue_empty(&pq)) {
+		e = pqueue_top(&pq, wedgef_t); pqueue_pop(&pq);
+		u = e.from; v = e.to;
+		if (!dset_joined(&ds, u, v)) {
+			dset_join(&ds, u, v);
+			result.span_weight += e.weight;
+			if (++span_size == g->vertex_count - 1) break;
+		}
+	}
+
+	pqueue_destroy(&pq);
+	dset_destroy(&ds);
+
+	return result;
+}
 
 #endif // I_GRAPH_IMPLEMENTATION
 #endif // GRAPH_IMPLEMENTATION

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: MIT */
 /*
  * dsetuf.h -- single-header disjoint-set (union-find)
  *
