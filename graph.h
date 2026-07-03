@@ -116,6 +116,13 @@ GRAPH_DECL void wfdgraph_construct(wfdgraph_t *g, const wedgef_t *edges, graph_s
 GRAPH_DECL void widgraph_destroy(widgraph_t *g);
 GRAPH_DECL void wfdgraph_destroy(wfdgraph_t *g);
 
+GRAPH_DECL edge_t   *graph_edges_al(const graph_t *g, graph_size_t *out_count);
+GRAPH_DECL edge_t   *dgraph_edges_al(const dgraph_t *g, graph_size_t *out_count);
+GRAPH_DECL wedgei_t *wigraph_edges_al(const wigraph_t *g, graph_size_t *out_count);
+GRAPH_DECL wedgei_t *widgraph_edges_al(const widgraph_t *g, graph_size_t *out_count);
+GRAPH_DECL wedgef_t *wfgraph_edges_al(const wfgraph_t *g, graph_size_t *out_count);
+GRAPH_DECL wedgef_t *wfdgraph_edges_al(const wfdgraph_t *g, graph_size_t *out_count);
+
 typedef struct {
 	vertex_id_t *component_id;
 	vertex_id_t *postorder;
@@ -495,6 +502,50 @@ GRAPH_DECL void name(type *g) \
 GRAPH_DEFINE_WDGRAPH_DESTROY(widgraph_destroy, widgraph_t)
 GRAPH_DEFINE_WDGRAPH_DESTROY(wfdgraph_destroy, wfdgraph_t)
 
+/*
+ * X-macro generator for per-graph-type edge-list extraction.
+ *
+ * weight_assign - statement (no trailing ;) assigning edges[count].weight,
+ *                 or (void)0 for unweighted types.
+ * dedup_guard   - condition; `v > u` for undirected types (take each edge
+ *                 once), `1` for directed types (every CSR entry is a
+ *                 distinct real edge, take them all).
+ */
+#define GRAPH_DEFINE_EDGES_AL(fn_name, graph_type, edge_type, weight_assign, dedup_guard) \
+GRAPH_DECL edge_type *fn_name(const graph_type *g, graph_size_t *out_count) \
+{ \
+	edge_type   *edges; \
+	graph_size_t count; \
+	vertex_id_t  u; \
+	vertex_id_t  v; \
+	vertex_id_t  i; \
+\
+	edges = (edge_type *)GRAPH_MALLOC(sizeof(edge_type) * g->edge_count); \
+	count = 0; \
+\
+	for (u = 0; u < g->vertex_count; ++u) { \
+		for (i = g->offsets[u]; i < g->offsets[u + 1]; ++i) { \
+			v = g->edges[i]; \
+			if (dedup_guard) { \
+				edges[count].from = u; \
+				edges[count].to   = v; \
+				weight_assign; \
+				count++; \
+			} \
+		} \
+	} \
+\
+	*out_count = count; \
+	return edges; \
+}
+
+GRAPH_DEFINE_EDGES_AL(graph_edges_al,    graph_t,    edge_t,   (void)0,                             v > u)
+GRAPH_DEFINE_EDGES_AL(dgraph_edges_al,   dgraph_t,   edge_t,   (void)0,                             1)
+GRAPH_DEFINE_EDGES_AL(wigraph_edges_al,  wigraph_t,  wedgei_t, edges[count].weight = g->weights[i], v > u)
+GRAPH_DEFINE_EDGES_AL(widgraph_edges_al, widgraph_t, wedgei_t, edges[count].weight = g->weights[i], 1)
+GRAPH_DEFINE_EDGES_AL(wfgraph_edges_al,  wfgraph_t,  wedgef_t, edges[count].weight = g->weights[i], v > u)
+GRAPH_DEFINE_EDGES_AL(wfdgraph_edges_al, wfdgraph_t, wedgef_t, edges[count].weight = g->weights[i], 1)
+
 /* ------------------------------------------------------------------- */
 
 #define I_VTX_UNVISITED ((vertex_id_t)-1)
@@ -731,33 +782,25 @@ PQ_DEFINE_CMP_FIELD_ASC(kruskal_cmpf, wedgef_t, weight);
 
 GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g)
 {
-	pqueue_t     pq;
-	vertex_id_t  u;
-	vertex_id_t  v;
-	vertex_id_t  i;
-	wedgei_t     e;
-
-	pqueue_construct(&pq, sizeof(wedgei_t), kruskal_cmpi);
-
-	for (u = 0; u < g->vertex_count; ++u) {
-		for (i = g->offsets[u]; i < g->offsets[u + 1]; ++i) {
-			v = g->edges[i];
-
-			if (v > u) {
-				e.from   = u;
-				e.to     = v;
-				e.weight = g->weights[i];
-
-				pqueue_push(&pq, &e);
-			}
-		}
-	}
-
-	disjoint_set_t ds;
-	dset_construct(&ds, g->vertex_count);
-
+	pqueue_t          pq;
+	wedgei_t         *edges;
+	graph_size_t      edge_count;
+	graph_size_t      k;
+	vertex_id_t       u;
+	vertex_id_t       v;
+	wedgei_t          e;
+	disjoint_set_t    ds;
 	graph_kruskal_i_result_t result = {0};
 
+	edges = wigraph_edges_al(g, &edge_count);
+
+	pqueue_construct(&pq, sizeof(wedgei_t), kruskal_cmpi);
+	for (k = 0; k < edge_count; ++k) {
+		pqueue_push(&pq, &edges[k]);
+	}
+	GRAPH_FREE(edges);
+
+	dset_construct(&ds, g->vertex_count);
 	result.MST = (wedgei_t *)GRAPH_MALLOC((g->vertex_count - 1) * sizeof(wedgei_t));
 
 	while (!pqueue_empty(&pq)) {
@@ -773,39 +816,30 @@ GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g)
 
 	pqueue_destroy(&pq);
 	dset_destroy(&ds);
-
 	return result;
 }
 
 GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g)
 {
-	pqueue_t     pq;
-	vertex_id_t  u;
-	vertex_id_t  v;
-	vertex_id_t  i;
-	wedgef_t     e;
-
-	pqueue_construct(&pq, sizeof(wedgef_t), kruskal_cmpf);
-
-	for (u = 0; u < g->vertex_count; ++u) {
-		for (i = g->offsets[u]; i < g->offsets[u + 1]; ++i) {
-			v = g->edges[i];
-
-			if (v > u) {
-				e.from   = u;
-				e.to     = v;
-				e.weight = g->weights[i];
-
-				pqueue_push(&pq, &e);
-			}
-		}
-	}
-
-	disjoint_set_t ds;
-	dset_construct(&ds, g->vertex_count);
-
+	pqueue_t          pq;
+	wedgef_t         *edges;
+	graph_size_t      edge_count;
+	graph_size_t      k;
+	vertex_id_t       u;
+	vertex_id_t       v;
+	wedgef_t          e;
+	disjoint_set_t    ds;
 	graph_kruskal_f_result_t result = {0};
 
+	edges = wfgraph_edges_al(g, &edge_count);
+
+	pqueue_construct(&pq, sizeof(wedgef_t), kruskal_cmpf);
+	for (k = 0; k < edge_count; ++k) {
+		pqueue_push(&pq, &edges[k]);
+	}
+	GRAPH_FREE(edges);
+
+	dset_construct(&ds, g->vertex_count);
 	result.MST = (wedgef_t *)GRAPH_MALLOC((g->vertex_count - 1) * sizeof(wedgef_t));
 
 	while (!pqueue_empty(&pq)) {
@@ -821,7 +855,6 @@ GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g)
 
 	pqueue_destroy(&pq);
 	dset_destroy(&ds);
-
 	return result;
 }
 
