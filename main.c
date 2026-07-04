@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #define LINALG_IMPLEMENTATION
 #include "linalg.h"
@@ -537,8 +538,115 @@ void kruskaltest(void)
 	wfgraph_destroy(&gf);
 }
 
+static void
+test_floyd_directed_int(void)
+{
+	widgraph_t g;
+	wedgei_t edges[] = {
+		{ .from = 0, .to = 1, .weight = 5 },
+		{ .from = 0, .to = 3, .weight = 10 },
+		{ .from = 1, .to = 2, .weight = 3 },
+		{ .from = 2, .to = 3, .weight = 1 },
+	};
+	graph_floyd_i_result_t r;
+	graph_size_t n = 4;
+	vertex_id_t *path;
+	graph_size_t path_len;
+
+	widgraph_construct(&g, edges, n, 4);
+	r = widgraph_floyd_al(&g);
+
+	assert(r.has_negative_cycle == 0);
+	assert(r.dist[0 * n + 3] == 9);   /* 0->1->2->3 beats direct 0->3 */
+	assert(r.dist[0 * n + 1] == 5);
+	assert(r.dist[0 * n + 2] == 8);
+	assert(r.dist[1 * n + 3] == 4);
+	assert(r.dist[3 * n + 0] == I_DIJKSTRA_INT_INF); /* unreachable, no back edges */
+
+	path = graph_floyd_path_al(r.next, n, 0, 3, &path_len);
+	assert(path != NULL);
+	assert(path_len == 4);
+	assert(path[0] == 0 && path[1] == 1 && path[2] == 2 && path[3] == 3);
+	free(path);
+
+	path = graph_floyd_path_al(r.next, n, 3, 0, &path_len);
+	assert(path == NULL);
+	assert(path_len == 0);
+
+	free(r.dist);
+	free(r.next);
+	widgraph_destroy(&g);
+
+	printf("test_floyd_directed_int: OK\n");
+}
+
+static void
+test_floyd_negative_cycle_int(void)
+{
+	widgraph_t g;
+	wedgei_t edges[] = {
+		{ .from = 0, .to = 1, .weight = 1 },
+		{ .from = 1, .to = 0, .weight = -2 },
+	};
+	graph_floyd_i_result_t r;
+
+	widgraph_construct(&g, edges, 2, 2);
+	r = widgraph_floyd_al(&g);
+
+	assert(r.has_negative_cycle == 1);
+
+	free(r.dist);
+	free(r.next);
+	widgraph_destroy(&g);
+
+	printf("test_floyd_negative_cycle_int: OK\n");
+}
+
+static void
+test_floyd_undirected_float(void)
+{
+	wfgraph_t g;
+	wedgef_t edges[] = {
+		{ .from = 0, .to = 1, .weight = 2.0f },
+		{ .from = 1, .to = 2, .weight = 4.0f },
+		{ .from = 0, .to = 2, .weight = 9.0f },
+	};
+	graph_floyd_f_result_t r;
+	graph_size_t n = 3;
+	vertex_id_t *path;
+	graph_size_t path_len;
+
+	wfgraph_construct(&g, edges, n, 3);
+	r = wfgraph_floyd_al(&g);
+
+	assert(r.has_negative_cycle == 0);
+	assert(r.dist[0 * n + 2] == 6.0f);            /* 0-1-2 beats direct 0-2 */
+	assert(r.dist[0 * n + 2] == r.dist[2 * n + 0]); /* symmetric */
+	assert(r.dist[1 * n + 1] == 0.0f);
+
+	path = graph_floyd_path_al(r.next, n, 0, 2, &path_len);
+	assert(path != NULL);
+	assert(path_len == 3);
+	assert(path[0] == 0 && path[1] == 1 && path[2] == 2);
+	free(path);
+
+	free(r.dist);
+	free(r.next);
+	wfgraph_destroy(&g);
+
+	printf("test_floyd_undirected_float: OK\n");
+}
+
+void
+test_floyd(void)
+{
+	test_floyd_directed_int();
+	test_floyd_negative_cycle_int();
+	test_floyd_undirected_float();
+}
+
 int main(void)
 {
-	kruskaltest();
+	test_floyd();
 	return 0;
 }

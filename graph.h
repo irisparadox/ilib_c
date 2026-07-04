@@ -1,13 +1,88 @@
-/* SPDX-License-Identifier: MIT */
 /*
- * Create undirected, directed, weighted, and unweighted graphs
- * easily, and perform common graph algorithms with a simple C API.
+ * graph.h -- single-header CSR graph library with common
+ *            graph algorithms
  *
- * In exactly one translation unit define GRAPH_IMPLEMENTATION
- * before including to emit function definitions. All other
- * translation units include normally and get declarations.
+ * SPDX-License-Identifier: MIT
  *
- * Define GRAPH_DECL before including to override default linkage.
+ * Six graph flavors, all backed by CSR (compressed sparse row)
+ * adjacency storage, covering the undirected/directed and
+ * unweighted/weighted-int/weighted-float combinations:
+ *
+ *     graph_t     - undirected, unweighted
+ *     dgraph_t    - directed, unweighted (fwd + reverse CSR)
+ *     wigraph_t   - undirected, int-weighted
+ *     wfgraph_t   - undirected, float-weighted
+ *     widgraph_t  - directed, int-weighted (fwd + reverse CSR)
+ *     wfdgraph_t  - directed, float-weighted (fwd + reverse CSR)
+ *
+ * Usage:
+ *     #define GRAPH_IMPLEMENTATION
+ *     #include "graph.h"
+ *
+ * Pulls in queue.h (QUEUE_IMPLEMENTATION + PQUEUE_IMPLEMENTATION)
+ * and dsetuf.h (DSUF_IMPLEMENTATION) automatically if not already
+ * defined, since BFS, Dijkstra, and Kruskal depend on them.
+ *
+ * CONFIGURATION
+ *     GRAPH_DECL                            Linkage/inline specifier
+ *                                            for declarations.
+ *                                            (default: static inline)
+ *     GRAPH_MALLOC/GRAPH_FREE/
+ *     GRAPH_REALLOC/GRAPH_CALLOC             Custom allocator. All four
+ *                                            or none.
+ *     GRAPH_MEMSET/GRAPH_MEMCPY              Custom mem ops. Both or
+ *                                            neither.
+ *
+ * MEMORY OWNERSHIP
+ *     Functions suffixed `_al` transfer ownership of every pointer
+ *     in their result to the caller. Free each with plain free()
+ *     (or whatever GRAPH_FREE was configured as), never mix with
+ *     the graph's own destroy functions.
+ *
+ * CONSTRUCTION / DESTRUCTION
+ *     *_construct    Build a graph from an edge list. Undirected
+ *                    types internally double each edge (u,v)/(v,u);
+ *                    directed types build both a forward and a
+ *                    reverse CSR.
+ *     *_destroy      Free all memory owned by the graph struct
+ *                    itself (not `_al` results).
+ *
+ * EDGE EXTRACTION
+ *     *_edges_al     Recover a flat, deduplicated edge list from a
+ *                    graph's CSR storage.
+ *
+ * TRAVERSAL
+ *     *_dfs_al       Iterative-recursive DFS over all components.
+ *                    Reports per-vertex component id, a postorder
+ *                    vertex ordering, component count, and whether
+ *                    any back-edge (cycle) was found.
+ *     *_bfs_al       BFS from a single origin. Reports visited flags,
+ *                    predecessor (`prev`) array, and distances in
+ *                    edge count. (graph_t, dgraph_t only.)
+ *
+ * SHORTEST PATHS
+ *     *_dijkstra_al  Single-source shortest paths via a binary-heap
+ *                    priority queue. Requires non-negative weights.
+ *                    Reports distances, predecessors, and visited
+ *                    flags. Int and float weight variants.
+ *     *_floyd_al     All-pairs shortest paths via Floyd-Warshall.
+ *                    Tolerates negative edge weights (unlike
+ *                    Dijkstra) and flags negative cycles via
+ *                    has_negative_cycle. Reports a flat n*n distance
+ *                    matrix and a flat n*n next-hop matrix for path
+ *                    reconstruction. O(V^3) time, O(V^2) space --
+ *                    mind the memory cost on large graphs. Int and
+ *                    float weight variants.
+ *     graph_floyd_path_al
+ *                    Walk a Floyd-Warshall next-hop matrix from one
+ *                    vertex to another, returning the vertex
+ *                    sequence, or NULL if unreachable.
+ *
+ * MINIMUM SPANNING TREE
+ *     *_kruskal_al   Kruskal's MST via edge-sorted priority queue and
+ *                    disjoint-set union (dsetuf.h). Reports the MST
+ *                    edge list and total span weight. Undirected,
+ *                    int and float weight variants only.
  */
 
 #ifndef GRAPH_H
@@ -184,6 +259,28 @@ typedef struct {
 GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g);
 GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g);
 
+typedef struct {
+	int          *dist;
+	vertex_id_t  *next;
+	graph_size_t  vertex_count;
+	char          has_negative_cycle;
+} graph_floyd_i_result_t;
+
+typedef struct {
+	float        *dist;
+	vertex_id_t  *next;
+	graph_size_t  vertex_count;
+	char          has_negative_cycle;
+} graph_floyd_f_result_t;
+
+GRAPH_DECL graph_floyd_i_result_t wigraph_floyd_al(const wigraph_t *g);
+GRAPH_DECL graph_floyd_i_result_t widgraph_floyd_al(const widgraph_t *g);
+GRAPH_DECL graph_floyd_f_result_t wfgraph_floyd_al(const wfgraph_t *g);
+GRAPH_DECL graph_floyd_f_result_t wfdgraph_floyd_al(const wfdgraph_t *g);
+
+GRAPH_DECL vertex_id_t *graph_floyd_path_al(const vertex_id_t *next, graph_size_t n,
+                                             vertex_id_t from, vertex_id_t to, graph_size_t *out_len);
+
 #endif // GRAPH_H
 
 //#define GRAPH_IMPLEMENTATION
@@ -255,19 +352,19 @@ static void i_csrgraph_builder(vertex_id_t *offsets, vertex_id_t *target, const 
 	vertex_id_t *cursor;
 	graph_size_t i;
 
-	for (i = 0; i < edge_count; i++) {
+	for (i = 0; i < edge_count; ++i) {
 		vertex_id_t from = reverse ? edges[i].to : edges[i].from;
 		offsets[from + 1]++;
 	}
 
-	for (i = 0; i < vertex_count; i++) {
+	for (i = 0; i < vertex_count; ++i) {
 		offsets[i + 1] += offsets[i];
 	}
 
 	cursor = (vertex_id_t *)GRAPH_MALLOC(vertex_count * sizeof(vertex_id_t));
 	GRAPH_MEMCPY(cursor, offsets, vertex_count * sizeof(vertex_id_t));
 
-	for (i = 0; i < edge_count; i++) {
+	for (i = 0; i < edge_count; ++i) {
 		vertex_id_t from = reverse ? edges[i].to   : edges[i].from;
 		vertex_id_t to   = reverse ? edges[i].from : edges[i].to;
 		target[cursor[from]++] = to;
@@ -287,7 +384,7 @@ static void i_wcsrgraph_builder(vertex_id_t *offsets, vertex_id_t *target, void 
 
 	stride = (flags & I_BFLAG_TYPEF) ? sizeof(wedgef_t) : sizeof(wedgei_t);
 
-	for (i = 0; i < edge_count; i++) {
+	for (i = 0; i < edge_count; ++i) {
 		const char *e = (const char *)edges + i * stride;
 		edge_t edge;
 
@@ -296,13 +393,13 @@ static void i_wcsrgraph_builder(vertex_id_t *offsets, vertex_id_t *target, void 
 		offsets[(reverse ? edge.to : edge.from) + 1]++;
 	}
 
-	for (i = 0; i < vertex_count; i++)
+	for (i = 0; i < vertex_count; ++i)
 		offsets[i + 1] += offsets[i];
 
 	cursor = (vertex_id_t *)GRAPH_MALLOC(vertex_count * sizeof(vertex_id_t));
 	GRAPH_MEMCPY(cursor, offsets, vertex_count * sizeof(vertex_id_t));
 
-	for (i = 0; i < edge_count; i++) {
+	for (i = 0; i < edge_count; ++i) {
 		const char *e = (const char *)edges + i * stride;
 		edge_t edge;
 		vertex_id_t from, to, pos;
@@ -334,7 +431,7 @@ GRAPH_DECL void graph_construct(graph_t *g, const edge_t *edges, graph_size_t ve
 	g->edge_count   = doubled_count;
 
 	doubled = (edge_t *)GRAPH_MALLOC(doubled_count * sizeof(edge_t));
-	for (i = 0; i < edge_count; i++) {
+	for (i = 0; i < edge_count; ++i) {
 		doubled[2 * i].from     = edges[i].from;
 		doubled[2 * i].to       = edges[i].to;
 		doubled[2 * i + 1].from = edges[i].to;
@@ -392,7 +489,7 @@ GRAPH_DECL void wigraph_construct(wigraph_t *g, const wedgei_t *edges, graph_siz
 	g->edge_count   = doubled_count;
 
 	doubled = (wedgei_t *)GRAPH_MALLOC(doubled_count * sizeof(wedgei_t));
-	for (i = 0; i < edge_count; i++) {
+	for (i = 0; i < edge_count; ++i) {
 		doubled[2 * i].from     = edges[i].from;
 		doubled[2 * i].to       = edges[i].to;
 		doubled[2 * i].weight   = edges[i].weight;
@@ -419,7 +516,7 @@ GRAPH_DECL void wfgraph_construct(wfgraph_t *g, const wedgef_t *edges, graph_siz
 	g->edge_count   = doubled_count;
 
 	doubled = (wedgef_t *)GRAPH_MALLOC(doubled_count * sizeof(wedgef_t));
-	for (i = 0; i < edge_count; i++) {
+	for (i = 0; i < edge_count; ++i) {
 		doubled[2 * i].from     = edges[i].from;
 		doubled[2 * i].to       = edges[i].to;
 		doubled[2 * i].weight   = edges[i].weight;
@@ -559,7 +656,7 @@ i_dfs_visit_recursive(const vertex_id_t *offsets, const vertex_id_t *edges,
 	stacked[v] = 1;
 	result->component_id[v] = component;
 
-	for (i = offsets[v]; i < offsets[v + 1]; i++) {
+	for (i = offsets[v]; i < offsets[v + 1]; ++i) {
 		vertex_id_t neighbor = edges[i];
 
 		if (neighbor == parent) continue;
@@ -589,11 +686,11 @@ i_dfs_core(const vertex_id_t *offsets, const vertex_id_t *edges, graph_size_t ve
 	result.component_count = 0;
 	result.has_cycle = 0;
 
-	for (i = 0; i < vertex_count; i++) {
+	for (i = 0; i < vertex_count; ++i) {
 		result.component_id[i] = I_VTX_UNVISITED;
 	}
 
-	for (i = 0; i < vertex_count; i++) {
+	for (i = 0; i < vertex_count; ++i) {
 		if (result.component_id[i] == I_VTX_UNVISITED) {
 			i_dfs_visit_recursive(offsets, edges, (vertex_id_t)i, I_VTX_UNVISITED,
 			                      (vertex_id_t)result.component_count, &result, stacked, &postorder_idx);
@@ -701,7 +798,7 @@ i_dijkstra_i_core(const vertex_id_t *offsets, const vertex_id_t *edges, const in
 			continue; /* stale entry, a better path was already finalized */
 		}
 		result.visited[u] = 1;
-		for (j = offsets[u]; j < offsets[u + 1]; j++) {
+		for (j = offsets[u]; j < offsets[u + 1]; ++j) {
 			vertex_id_t v = edges[j];
 			int w = weights[j];
 			int alt = result.dist[u] + w;
@@ -744,7 +841,7 @@ i_dijkstra_f_core(const vertex_id_t *offsets, const vertex_id_t *edges, const fl
 			continue;
 		}
 		result.visited[u] = 1;
-		for (j = offsets[u]; j < offsets[u + 1]; j++) {
+		for (j = offsets[u]; j < offsets[u + 1]; ++j) {
 			vertex_id_t v = edges[j];
 			float w = weights[j];
 			float alt = result.dist[u] + w;
@@ -856,6 +953,162 @@ GRAPH_DECL graph_kruskal_f_result_t wfgraph_kruskal_al(const wfgraph_t *g)
 	pqueue_destroy(&pq);
 	dset_destroy(&ds);
 	return result;
+}
+
+#define I_FLOYD_UNREACHABLE I_VTX_UNVISITED
+
+static graph_floyd_i_result_t
+i_floyd_i_core(const vertex_id_t *offsets, const vertex_id_t *edges, const int *weights, graph_size_t vertex_count)
+{
+	graph_floyd_i_result_t result;
+	graph_size_t n = vertex_count;
+	graph_size_t i, j, k;
+
+	result.dist = (int *)GRAPH_MALLOC(n * n * sizeof(int));
+	result.next = (vertex_id_t *)GRAPH_MALLOC(n * n * sizeof(vertex_id_t));
+	result.vertex_count = n;
+	result.has_negative_cycle = 0;
+
+	for (i = 0; i < n; ++i) {
+		for (j = 0; j < n; ++j) {
+			result.dist[i * n + j] = (i == j) ? 0 : I_DIJKSTRA_INT_INF;
+			result.next[i * n + j] = I_FLOYD_UNREACHABLE;
+		}
+	}
+
+	for (i = 0; i < n; ++i) {
+		vertex_id_t e;
+		for (e = offsets[i]; e < offsets[i + 1]; ++e) {
+			vertex_id_t v = edges[e];
+			int w = weights[e];
+			if (w < result.dist[i * n + v]) {
+				result.dist[i * n + v] = w;
+				result.next[i * n + v] = v;
+			}
+		}
+		result.next[i * n + i] = (vertex_id_t)i;
+	}
+
+	for (k = 0; k < n; ++k) {
+		for (i = 0; i < n; ++i) {
+			int dik = result.dist[i * n + k];
+			if (dik == I_DIJKSTRA_INT_INF) continue;
+			for (j = 0; j < n; ++j) {
+				int dkj = result.dist[k * n + j];
+				int alt;
+				if (dkj == I_DIJKSTRA_INT_INF) continue;
+				alt = dik + dkj;
+				if (alt < result.dist[i * n + j]) {
+					result.dist[i * n + j] = alt;
+					result.next[i * n + j] = result.next[i * n + k];
+				}
+			}
+		}
+	}
+
+	for (i = 0; i < n; ++i) {
+		if (result.dist[i * n + i] < 0) {
+			result.has_negative_cycle = 1;
+			break;
+		}
+	}
+
+	return result;
+}
+
+static graph_floyd_f_result_t
+i_floyd_f_core(const vertex_id_t *offsets, const vertex_id_t *edges, const float *weights, graph_size_t vertex_count)
+{
+	graph_floyd_f_result_t result;
+	graph_size_t n = vertex_count;
+	graph_size_t i, j, k;
+
+	result.dist = (float *)GRAPH_MALLOC(n * n * sizeof(float));
+	result.next = (vertex_id_t *)GRAPH_MALLOC(n * n * sizeof(vertex_id_t));
+	result.vertex_count = n;
+	result.has_negative_cycle = 0;
+
+	for (i = 0; i < n; ++i) {
+		for (j = 0; j < n; ++j) {
+			result.dist[i * n + j] = (i == j) ? 0 : I_DIJKSTRA_FLT_INF;
+			result.next[i * n + j] = I_FLOYD_UNREACHABLE;
+		}
+	}
+
+	for (i = 0; i < n; ++i) {
+		vertex_id_t e;
+		for (e = offsets[i]; e < offsets[i + 1]; ++e) {
+			vertex_id_t v = edges[e];
+			float w = weights[e];
+			if (w < result.dist[i * n + v]) {
+				result.dist[i * n + v] = w;
+				result.next[i * n + v] = v;
+			}
+		}
+		result.next[i * n + i] = (vertex_id_t)i;
+	}
+
+	for (k = 0; k < n; ++k) {
+		for (i = 0; i < n; ++i) {
+			float dik = result.dist[i * n + k];
+			if (dik == I_DIJKSTRA_FLT_INF) continue;
+			for (j = 0; j < n; ++j) {
+				float dkj = result.dist[k * n + j];
+				float alt;
+				if (dkj == I_DIJKSTRA_FLT_INF) continue;
+				alt = dik + dkj;
+				if (alt < result.dist[i * n + j]) {
+					result.dist[i * n + j] = alt;
+					result.next[i * n + j] = result.next[i * n + k];
+				}
+			}
+		}
+	}
+
+	for (i = 0; i < n; ++i) {
+		if (result.dist[i * n + i] < 0.0f) {
+			result.has_negative_cycle = 1;
+			break;
+		}
+	}
+
+	return result;
+}
+
+
+GRAPH_DECL graph_floyd_i_result_t wigraph_floyd_al(const wigraph_t *g)
+{ return i_floyd_i_core(g->offsets, g->edges, g->weights, g->vertex_count); }
+
+GRAPH_DECL graph_floyd_i_result_t widgraph_floyd_al(const widgraph_t *g)
+{ return i_floyd_i_core(g->offsets, g->edges, g->weights, g->vertex_count); }
+
+GRAPH_DECL graph_floyd_f_result_t wfgraph_floyd_al(const wfgraph_t *g)
+{ return i_floyd_f_core(g->offsets, g->edges, g->weights, g->vertex_count); }
+
+GRAPH_DECL graph_floyd_f_result_t wfdgraph_floyd_al(const wfdgraph_t *g)
+{ return i_floyd_f_core(g->offsets, g->edges, g->weights, g->vertex_count); }
+
+GRAPH_DECL vertex_id_t *graph_floyd_path_al(const vertex_id_t *next, graph_size_t n,
+                                             vertex_id_t from, vertex_id_t to, graph_size_t *out_len)
+{
+	vertex_id_t *path;
+	graph_size_t len = 0;
+	vertex_id_t cur = from;
+
+	if (next[from * n + to] == I_FLOYD_UNREACHABLE) {
+		*out_len = 0;
+		return NULL;
+	}
+
+	path = (vertex_id_t *)GRAPH_MALLOC((n + 1) * sizeof(vertex_id_t));
+	path[len++] = from;
+	while (cur != to) {
+		cur = next[cur * n + to];
+		path[len++] = cur;
+	}
+
+	*out_len = len;
+	return path;
 }
 
 #endif // I_GRAPH_IMPLEMENTATION

@@ -52,7 +52,7 @@ DSUF_DECL set_size_t dset_cardinality(const disjoint_set_t *ds, int x);
 
 #endif /* DSETUF_H */
 
-#define DSUF_IMPLEMENTATION
+//#define DSUF_IMPLEMENTATION
 #ifdef DSUF_IMPLEMENTATION
 #ifndef I_DSUF_IMPLEMENTATION
 #define I_SETUF_IMPLEMENTATION
