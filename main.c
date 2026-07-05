@@ -637,8 +637,7 @@ test_floyd_undirected_float(void)
 	printf("test_floyd_undirected_float: OK\n");
 }
 
-void
-test_floyd(void)
+void test_floyd(void)
 {
 	test_floyd_directed_int();
 	test_floyd_negative_cycle_int();

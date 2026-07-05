@@ -1,34 +1,27 @@
 .Dd July 5, 2026
 .Dt DSETUF 7
 .Os
+
 .Sh NAME
 .Nm dsetuf
 .Nd disjoint-set (union-find) module
+
 .Sh LIBRARY
 IRIS C Library
 .Pq Vt ilib_c
-.Sh SYNOPSIS
-.In dsetuf.h
-.Bd -literal
-typedef struct {
-	set_size_t  set_count; /* number of disjoint sets */
-	set_size_t *size;      /* size of each tree-set   */
-	int        *parent;    /* basically parent_of(x)  */
-} disjoint_set_t;
-.Ed
+
 .Sh DESCRIPTION
 The
 .Nm
 module implements a disjoint-set (also called union-find) data structure over
 .Fa set_size_t
-integer elements in the range
-.Bq Sy 0 , size .
-Each element begins in its own singleton set; sets can be merged with
-.Xr dset_join 3 ,
+integer elements in the range [0, size). Each element begins in its own
+singleton set; sets can be merged with
+.Fn dset_join ,
 and the representative
 .Pq root
 of the set containing an element can be queried with
-.Xr dset_find 3 .
+.Fn dset_find .
 .Pp
 Internally, each set is represented as a tree encoded in the
 .Fa parent
@@ -41,12 +34,12 @@ as a root. Two optimizations keep operations fast:
 .It
 .Em Path compression :
 every call to
-.Xr dset_find 3
+.Fn dset_find
 rewrites the parent pointers of all nodes visited so they point
 directly at the root, flattening the tree for future lookups.
 .It
 .Em Union by size :
-.Xr dset_join 3
+.Fn dset_join
 always attaches the smaller tree's root under the larger tree's root,
 using the
 .Fa size
@@ -55,21 +48,118 @@ array to track tree sizes, which bounds tree height logarithmically.
 .Pp
 Together these give amortized near-constant time per operation.
 .Pp
+The
+.Vt disjoint_set_t
+structure is defined as:
+.Bd -literal
+typedef struct {
+	set_size_t  set_count; /* number of disjoint sets */
+	set_size_t *size;      /* size of each tree-set   */
+	int        *parent;    /* basically parent_of(x)  */
+} disjoint_set_t;
+.Ed
+.Pp
+The variables with type
+.Vt set_size_t
+are basically just unsigned integers.
+.Pp
 The following functions make up the module's API:
-.Bl -tag -width "dset_cardinality(3)"
-.It Xr dset_construct 3
+.Bl -tag -width "dset_cardinality()"
+.It Fn dset_construct
 initialize a
 .Vt disjoint_set_t
 of a given size.
-.It Xr dset_destroy 3
+.It Fn dset_destroy
 free all memory owned by a
 .Vt disjoint_set_t .
-.It Xr dset_find 3
+.It Fn dset_find
 return the root of the set containing an element.
-.It Xr dset_join 3
+.It Fn dset_join
 merge the sets containing two elements.
-.It Xr dset_joined 3
+.It Fn dset_joined
 test whether two elements belong to the same set.
-.It Xr dset_cardinality 3
+.It Fn dset_cardinality
 return the number of elements in an element's set.
 .El
+
+.Sh IMPLEMENTATION MACROS
+The following preprocessor macros control code generation and are
+checked at include time:
+.Bl -tag -width "DSUF_IMPLEMENTATIONXXX"
+.It Sy DSUF_IMPLEMENTATION
+Must be defined in exactly one translation unit before including
+.In dsetuf.h
+to emit function bodies. All other translation units should include
+the header without defining it, receiving declarations only.
+.It Sy DSUF_DECL
+Overrides the storage/linkage specifier applied to every function.
+Defaults to
+.Li static inline
+if left undefined.
+.It Sy DSUF_MALLOC , Sy DSUF_FREE
+Override the allocator used by
+.Fn dset_construct
+and
+.Fn dset_destroy .
+Both must be defined together, or neither; defining only one is a
+compile-time error. If neither is defined, both default to the
+standard library's
+.Fn malloc
+and
+.Fn free .
+.El
+
+.Sh STANDARDS
+.St -isoC-99
+
+.Sh NOTES
+No bounds checking is performed on the element index
+.Fa x
+passed to
+.Fn dset_find ,
+.Fn dset_join ,
+.Fn dset_joined ,
+or
+.Fn dset_cardinality .
+Passing a value outside [0, size) is undefined behavior.
+.Pp
+.Fn dset_find
+is implemented recursively. Path compression keeps subsequent calls
+shallow, but the first call on a long, uncompressed chain recurses to a
+depth proportional to the chain length.
+.Pp
+.Nm
+is not thread-safe; concurrent calls that mutate the same
+.Vt disjoint_set_t
+from multiple threads (including concurrent
+.Fn dset_find
+calls, since path compression writes to
+.Fa parent )
+are a data race.
+.Pp
+.Fn dset_joined
+and
+.Fn dset_cardinality
+take a
+.Fa const disjoint_set_t *
+but internally discard the
+.Sy const
+qualifier to call
+.Fn dset_find ,
+since path compression mutates
+.Fa parent
+even though the operation is logically a read. This is intentional
+.Pq logical constness ,
+not an oversight.
+
+.Sh SEE ALSO
+.Xr dset_construct 3 ,
+.Xr dset_destroy 3 ,
+.Xr dset_find 3 ,
+.Xr dset_join 3 ,
+.Xr dset_joined 3 ,
+.Xr dset_cardinality 3 ,
+.Xr graph_kruskal 3
+
+.Sh AUTHORS
+.An Gabriel Guillermo Saavedra Moreira
