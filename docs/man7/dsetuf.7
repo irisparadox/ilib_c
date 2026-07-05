@@ -51,17 +51,26 @@ Together these give amortized near-constant time per operation.
 The
 .Vt disjoint_set_t
 structure is defined as:
-.Bd -literal
+.Bd -literal -offset indent
 typedef struct {
-	set_size_t  set_count; /* number of disjoint sets */
-	set_size_t *size;      /* size of each tree-set   */
-	int        *parent;    /* basically parent_of(x)  */
+	set_size_t  set_count;
+	set_size_t *size;
+	int        *parent;
 } disjoint_set_t;
 .Ed
 .Pp
-The variables with type
 .Vt set_size_t
-are basically just unsigned integers.
+is an alias for
+.Vt unsigned int .
+.Pp
+Both
+.Va size
+and
+.Va parent
+are dynamically allocated arrays, using the allocator specified by
+.Sy DSUF_MALLOC ;
+see
+.Sx "IMPLEMENTATION MACROS" .
 .Pp
 The following functions make up the module's API:
 .Bl -tag -width "dset_cardinality()"
@@ -85,7 +94,7 @@ return the number of elements in an element's set.
 .Sh IMPLEMENTATION MACROS
 The following preprocessor macros control code generation and are
 checked at include time:
-.Bl -tag -width "DSUF_IMPLEMENTATIONXXX"
+.Bl -tag
 .It Sy DSUF_IMPLEMENTATION
 Must be defined in exactly one translation unit before including
 .In dsetuf.h
