@@ -1,0 +1,75 @@
+.Dd July 5, 2026
+.Dt DSETUF 7
+.Os
+.Sh NAME
+.Nm dsetuf
+.Nd disjoint-set (union-find) module
+.Sh LIBRARY
+IRIS C Library
+.Pq Vt ilib_c
+.Sh SYNOPSIS
+.In dsetuf.h
+.Bd -literal
+typedef struct {
+	set_size_t  set_count; /* number of disjoint sets */
+	set_size_t *size;      /* size of each tree-set   */
+	int        *parent;    /* basically parent_of(x)  */
+} disjoint_set_t;
+.Ed
+.Sh DESCRIPTION
+The
+.Nm
+module implements a disjoint-set (also called union-find) data structure over
+.Fa set_size_t
+integer elements in the range
+.Bq Sy 0 , size .
+Each element begins in its own singleton set; sets can be merged with
+.Xr dset_join 3 ,
+and the representative
+.Pq root
+of the set containing an element can be queried with
+.Xr dset_find 3 .
+.Pp
+Internally, each set is represented as a tree encoded in the
+.Fa parent
+array, where
+.Fa parent[x] == x
+identifies
+.Fa x
+as a root. Two optimizations keep operations fast:
+.Bl -bullet
+.It
+.Em Path compression :
+every call to
+.Xr dset_find 3
+rewrites the parent pointers of all nodes visited so they point
+directly at the root, flattening the tree for future lookups.
+.It
+.Em Union by size :
+.Xr dset_join 3
+always attaches the smaller tree's root under the larger tree's root,
+using the
+.Fa size
+array to track tree sizes, which bounds tree height logarithmically.
+.El
+.Pp
+Together these give amortized near-constant time per operation.
+.Pp
+The following functions make up the module's API:
+.Bl -tag -width "dset_cardinality(3)"
+.It Xr dset_construct 3
+initialize a
+.Vt disjoint_set_t
+of a given size.
+.It Xr dset_destroy 3
+free all memory owned by a
+.Vt disjoint_set_t .
+.It Xr dset_find 3
+return the root of the set containing an element.
+.It Xr dset_join 3
+merge the sets containing two elements.
+.It Xr dset_joined 3
+test whether two elements belong to the same set.
+.It Xr dset_cardinality 3
+return the number of elements in an element's set.
+.El
