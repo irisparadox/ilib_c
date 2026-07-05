@@ -1,15 +1,12 @@
 .Dd July 5, 2026
-.Dt DSETUF 7
+.Dt dsetuf 7
 .Os
-
 .Sh NAME
 .Nm dsetuf
 .Nd disjoint-set (union-find) module
-
 .Sh LIBRARY
 IRIS C Library
 .Pq Vt ilib_c
-
 .Sh DESCRIPTION
 The
 .Nm
@@ -90,7 +87,6 @@ test whether two elements belong to the same set.
 .It Fn dset_cardinality
 return the number of elements in an element's set.
 .El
-
 .Sh IMPLEMENTATION MACROS
 The following preprocessor macros control code generation and are
 checked at include time:
@@ -117,10 +113,8 @@ standard library's
 and
 .Fn free .
 .El
-
 .Sh STANDARDS
 .St -isoC-99
-
 .Sh NOTES
 No bounds checking is performed on the element index
 .Fa x
@@ -160,7 +154,6 @@ since path compression mutates
 even though the operation is logically a read. This is intentional
 .Pq logical constness ,
 not an oversight.
-
 .Sh SEE ALSO
 .Xr dset_construct 3 ,
 .Xr dset_destroy 3 ,
@@ -169,6 +162,5 @@ not an oversight.
 .Xr dset_joined 3 ,
 .Xr dset_cardinality 3 ,
 .Xr graph_kruskal 3
-
 .Sh AUTHORS
 .An Gabriel Guillermo Saavedra Moreira

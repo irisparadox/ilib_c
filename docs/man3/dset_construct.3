@@ -1,0 +1,95 @@
+.Dd July 5, 2026
+.Dt dset_construct 3
+.Os
+.Sh NAME
+.Nm dset_construct ,
+.Nm dset_destroy
+.Nd initialize and destroy a disjoint-set structure
+.Sh LIBRARY
+IRIS C Library
+.Pq Vt ilib_c
+.Sh SYNOPSIS
+.In dsetuf.h
+.Ft void
+.Fo dset_construct
+.Fa "disjoint_set_t *ds"
+.Fa "set_size_t size"
+.Fc
+.Ft void
+.Fo dset_destroy
+.Fa "disjoint_set_t *ds"
+.Fc
+.Bl -tag -width -5n -offset -6n
+.It Implementation Macro Requirements (see \fIdsetuf\fR(7)):
+.El
+.Bl -tag
+.It \fBdset_construct\fR(), \fBdset_destroy\fR():
+DSUF_IMPLEMENTATION
+.El
+.Sh DESCRIPTION
+The functions
+.Fn dset_construct
+and
+.Fn dset_destroy
+together initialize, allocate, and prepare, or destroy and free, the
+memory of a disjoint-set structure.
+.Pq See Xr dsetuf 7 for an overview of the header.
+.Pp
+.Fa size
+specifies the number of elements in the disjoint-set. Each element
+initially occupies its own singleton set.
+.Bl -tag
+.It Fn dset_construct
+The
+.Fn dset_construct
+function initializes the disjoint-set, allocating
+.Fa size
+elements in each array of the structure.
+.Em The arrays are initialized .
+If
+.Fa size
+is 0, the value of the pointers is
+.Sy implementation-defined ,
+depending on the override of
+.Sy DSUF_MALLOC ,
+which by default is
+.Xr malloc 3
+from the Standard C Library.
+.Pq See Xr dsetuf 7 No for more info.
+.It Fn dset_destroy
+The
+.Fn dset_destroy
+function frees the memory allocated by a prior call to
+.Fn dset_construct
+and makes the
+.Vt disjoint_set_t
+object unusable afterward. Every
+.Vt disjoint_set_t
+initialized with
+.Fn dset_construct
+must eventually be passed to
+.Fn dset_destroy
+exactly once; omitting this call leaks memory, and calling it more
+than once on the same object is undefined behavior.
+.El
+.Sh ATTRIBUTES
+For an explanation of the terms used in this section, see
+.Xr attributes 7 .
+.TS
+allbox;
+lbx lb lb
+l l l.
+Interface	Attribute	Value
+T{
+.na
+.nh
+.Fn dset_construct ,
+.Fn dset_destroy
+T}	Thread Safety	MT-Unsafe
+.TE
+.Sh STANDARDS
+.Bl -tag -width Ds -compact
+.It Fn dset_construct
+.It Fn dset_destroy
+.El
+.D1 St -isoC-99
