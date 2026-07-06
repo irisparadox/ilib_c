@@ -471,8 +471,7 @@ void dijkstratest(void)
 
 void kruskaltest(void)
 {
-	/* Same weighted undirected graph as dijkstratest.
-	 * Expected MST (Kruskal, sorted by weight):
+	/* Expected MST (Kruskal, sorted by weight):
 	 *   (0,2,w1) join {0,2}
 	 *   (1,3,w1) join {1,3}
 	 *   (2,1,w2) join {0,2,1,3}
