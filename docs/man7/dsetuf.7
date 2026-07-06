@@ -114,7 +114,15 @@ and
 .Fn free .
 .El
 .Sh STANDARDS
-.St -isoC-99
+.Bl -tag -width Ds -compact
+.It Fn dset_construct
+.It Fn dset_destroy
+.It Fn dset_find
+.It Fn dset_join
+.It Fn dset_joined
+.It Fn dset_cardinality
+.El
+.D1 St -isoC-99
 .Sh NOTES
 No bounds checking is performed on the element index
 .Fa x
@@ -154,6 +162,67 @@ since path compression mutates
 even though the operation is logically a read. This is intentional
 .Pq logical constness ,
 not an oversight.
+.Sh EXAMPLES
+The following program builds a minimum spanning tree over a small
+weighted graph using Kruskal's algorithm, using
+.Nm
+to detect and reject edges that would form a cycle.
+.Bl -tag -width -5n -offset -6n
+.It Sy Kruskal program
+.El
+.Bl -tag -width 0
+.El
+.Bd -literal
+#define DSUF_IMPLEMENTATION
+#include "dsetuf.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct {
+	int u, v, weight;
+} edge_t;
+
+int cmp_edge(const void *a, const void *b)
+{
+	return ((const edge_t *)a)->weight
+	     - ((const edge_t *)b)->weight;
+}
+
+int main(void)
+{
+	edge_t edges[] = {
+		{0, 1, 4}, {0, 2, 1}, {1, 2, 2},
+		{1, 3, 5}, {2, 3, 8},
+	};
+	int n_edges = sizeof(edges) / sizeof(edges[0]);
+	int n_vertices = 4;
+
+	qsort(edges, n_edges, sizeof(edge_t), cmp_edge);
+
+	disjoint_set_t ds;
+	dset_construct(&ds, n_vertices);
+
+	int total_weight = 0;
+
+	for (int i = 0; i < n_edges; ++i) {
+		edge_t e = edges[i];
+
+		if (dset_joined(&ds, e.u, e.v))
+			continue; /* would form a cycle */
+
+		dset_join(&ds, e.u, e.v);
+		total_weight += e.weight;
+		printf("added edge %d-%d (weight %d)\\n",
+		       e.u, e.v, e.weight);
+	}
+
+	printf("total MST weight: %d\\n", total_weight);
+
+	dset_destroy(&ds);
+	return 0;
+}
+.Ed
 .Sh SEE ALSO
 .Xr dset_construct 3 ,
 .Xr dset_destroy 3 ,

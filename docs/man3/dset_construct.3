@@ -22,7 +22,9 @@ IRIS C Library
 .Bl -tag -width -5n -offset -6n
 .It Implementation Macro Requirements (see \fIdsetuf\fR(7)):
 .El
-.Bl -tag
+.Bl -tag -width 0
+.El
+.Bl -tag -width 2n
 .It \fBdset_construct\fR(), \fBdset_destroy\fR():
 DSUF_IMPLEMENTATION
 .El
@@ -93,3 +95,34 @@ T}	Thread Safety	MT-Unsafe
 .It Fn dset_destroy
 .El
 .D1 St -isoC-99
+.Sh NOTES
+Neither
+.Fn dset_construct
+nor
+.Fn dset_destroy
+validates
+.Fa ds
+itself; passing a null or otherwise invalid pointer is undefined
+behavior.
+.Pp
+.Fn dset_construct
+does not check the return value of
+.Sy DSUF_MALLOC .
+If allocation fails,
+.Fa ds
+is left with null
+.Va parent
+and
+.Va size
+pointers, and subsequent use of the
+.Vt disjoint_set_t
+is undefined behavior.
+.Sh SEE ALSO
+.Xr dset_find 3 ,
+.Xr dset_join 3 ,
+.Xr dset_joined 3 ,
+.Xr dset_cardinality 3 ,
+.Xr dsetuf 7 ,
+.Xr graph_kruskal 3
+.Sh AUTHORS
+.An Gabriel Guillermo Saavedra Moreira

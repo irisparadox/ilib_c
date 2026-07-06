@@ -1,0 +1,163 @@
+.Dd July 6, 2026
+.Dt dset_find 3
+.Os
+.Sh NAME
+.Nm dset_find ,
+.Nm dset_join ,
+.Nm dset_joined
+.Nd disjoint-set lookup and union operations
+.Sh LIBRARY
+IRIS C Library
+.Pq Vt ilib_c
+.Sh SYNOPSIS
+.In dsetuf.h
+.Ft int
+.Fo dset_find
+.Fa "disjoint_set_t *ds"
+.Fa "int x"
+.Fc
+.Ft void
+.Fo dset_join
+.Fa "disjoint_set_t *ds"
+.Fa "int a"
+.Fa "int b"
+.Fc
+.Ft int
+.Fo dset_joined
+.Fa "const disjoint_set_t *ds"
+.Fa "int a"
+.Fa "int b"
+.Fc
+.Bl -tag -width -5n -offset -6n
+.It Implementation Macro Requirements (see \fIdsetuf\fR(7)):
+.El
+.Bl -tag -width 0
+.El
+.Bl -tag -width 2n
+.It \fBdset_find\fR():
+DSUF_IMPLEMENTATION
+.It \fBdset_join\fR(), \fBdset_joined\fR():
+DSUF_IMPLEMENTATION
+.El
+.Sh DESCRIPTION
+Together,
+.Fn dset_find ,
+.Fn dset_join ,
+and
+.Fn dset_joined
+form the query and merge interface of a disjoint-set: locating an element's representative,
+merging two elements' sets, and testing whether two elements already belong to the
+same set.
+.Bl -tag
+.It Fn dset_find
+Locates the representative
+.Pq root
+of the set containing element
+.Fa x ,
+identified by
+.Fa parent[x] == x ,
+performing path compression along the way: every node visited has its parent pointer
+rewritten to point directly at the root, so subsequent calls on the same elements
+are faster.
+.It Fn dset_join
+Merges the sets containing elements
+.Fa a
+and
+.Fa b
+into a single set. If
+.Fa a
+and
+.Fa b
+already belong to the same set, the call has no effect. Otherwise, the
+smaller of the two sets
+.Pq by element count
+is attached under the root of the larger, using the
+.Va size
+array to decide which is smaller; this union-by-size strategy bounds
+the height of the resulting tree logarithmically.
+.It Fn dset_joined
+Tests whether
+.Fa a
+and
+.Fa b
+belong to the same set. It is equivalent to comparing the results of
+calling
+.Fn dset_find
+on each element, and is provided as a convenience so callers do not
+need to invoke
+.Fn dset_find
+directly for this common check.
+.El
+.Sh RETURN VALUE
+.Pp
+The
+.Fn dset_find
+and
+.Fn dset_joined
+functions return an integer. The former returns the representative
+.Pq root
+of the set containing
+.Fa x
+while the latter returns a value that can be used as a boolean.
+.Pp
+The
+.Fn dset_join
+function returns no value.
+.Sh ATTRIBUTES
+For an explanation of the terms used in this section, see
+.Xr attributes 7 .
+.TS
+allbox;
+lbx lb lb
+l l l.
+Interface	Attribute	Value
+T{
+.na
+.nh
+.Fn dset_find ,
+.Fn dset_join ,
+.Fn dset_joined
+T}	Thread Safety	MT-Unsafe
+.TE
+.Sh STANDARDS
+.Bl -tag -width Ds -compact
+.It Fn dset_find
+.It Fn dset_join
+.It Fn dset_joined
+.El
+.D1 St -isoC-99
+.Sh NOTES
+The
+.Fn dset_find ,
+.Fn dset_join ,
+and
+.Fn dset_joined
+functions perform no bounds checking.
+Passing an index outside the half-open interval [0, \fIsize\fR) results in undefined behavior.
+.Pp
+The
+.Fn dset_find
+function is implemented recursively.
+The maximum recursion depth is proportional to the height of the tree representing the set.
+In practice, path compression rapidly reduces tree height, making deep recursion uncommon after the initial lookup operations.
+.Pp
+Although
+.Fn dset_joined
+accepts a
+.Vt "const disjoint_set_t *"
+argument, it internally casts away
+.Dv const
+to invoke
+.Fn dset_find ,
+which performs path compression by updating the internal parent array.
+Consequently, the data structure may be modified even when accessed through a
+.Dv const
+pointer.
+.Sh SEE ALSO
+.Xr dset_construct 3 ,
+.Xr dset_destroy 3 ,
+.Xr dset_cardinality 3 ,
+.Xr dsetuf 7 ,
+.Xr graph_kruskal 3
+.Sh AUTHORS
+.An Gabriel Guillermo Saavedra Moreira
