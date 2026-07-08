@@ -12,7 +12,8 @@
 #define PQUEUE_IMPLEMENTATION
 #include "queue.h"
 
-int que_err = 0;
+#define ALLOCAI_IMPLEMENTATION
+#include "allocai.h"
 
 void vectest()
 {
@@ -643,8 +644,206 @@ void test_floyd(void)
 	test_floyd_undirected_float();
 }
 
+void test_arena_alloc(void)
+{
+	al_arena_t a;
+	al_byte_t *p1, *p2, *p3;
+	int i;
+
+	/* --- init: invalid arg --- */
+	a = al_arena_init(0);
+	assert(a.base == NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("init_invalid_arg: OK\n");
+
+	/* --- init: normal case --- */
+	a = al_arena_init(64);
+	assert(a.base != NULL);
+	assert(a.offset == 0);
+	assert(a.capacity == 64);
+	assert(al_errno == AL_OK);
+	printf("init_normal_case: OK\n");
+
+	/* --- alloc: invalid args --- */
+	p1 = al_arena_alloc(NULL, 8);
+	assert(p1 == NULL);
+	assert(al_errno == AL_ERRINVAL);
+
+	p1 = al_arena_alloc(&a, 0);
+	assert(p1 == NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("alloc_invalid_args: OK\n");
+
+	/* --- alloc: normal case, alignment --- */
+	p1 = al_arena_alloc(&a, 1);
+	assert(p1 != NULL);
+	assert(al_errno == AL_OK);
+	assert(a.offset == 1);
+
+	p2 = al_arena_alloc(&a, 1);
+	assert(p2 != NULL);
+	assert(p2 == p1 + ALLOC_ALIGNMENT);
+	printf("alloc_normal_case_alignment: OK\n");
+
+	/* --- alloc: exhaustion --- */
+	p3 = al_arena_alloc(&a, 1000); /* way bigger than remaining capacity */
+	assert(p3 == NULL);
+	assert(al_errno == AL_ERRNOMEM);
+	printf("alloc_exhaustion: OK\n");
+
+	/* --- calloc: zero-init check --- */
+	al_arena_reset(&a);
+	assert(a.offset == 0);
+	assert(al_errno == AL_OK);
+
+	p1 = al_arena_calloc(&a, 4, sizeof(int));
+	assert(p1 != NULL);
+	for (i = 0; i < (int)(4 * sizeof(int)); ++i) {
+		assert(p1[i] == 0);
+	}
+	printf("calloc_zero_init_check: OK\n");
+
+	/* --- calloc: overflow guard --- */
+	p2 = al_arena_calloc(&a, AL_SIZE_MAX, 2);
+	assert(p2 == NULL);
+	assert(al_errno == AL_ERRNOMEM);
+	printf("calloc_overflow_guard: OK\n");
+
+	/* --- reset: invalid arg --- */
+	al_arena_reset(NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("reset_invalid_arg: OK\n");
+
+	/* --- free: normal case --- */
+	al_arena_free(&a);
+	assert(a.base == NULL);
+	assert(a.offset == 0);
+	assert(a.capacity == 0);
+	assert(al_errno == AL_OK);
+	printf("free_normal_case: OK\n");
+
+	/* --- free: double-free is a safe no-op --- */
+	al_arena_free(&a);
+	assert(al_errno == AL_OK);
+	printf("free_double_free_safe_noop: OK\n");
+
+	/* --- free: invalid arg --- */
+	al_arena_free(NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("free_invalid_arg: OK\n");
+
+	printf("all alloc.h tests passed\n");
+}
+
+void test_stack_alloc(void)
+{
+	al_stack_t s;
+	al_byte_t *p1, *p2;
+	al_size_t saved;
+	int i;
+
+	/* --- init: invalid arg --- */
+	s = al_stack_init(0);
+	assert(s.arena.base == NULL);
+	assert(s.top == 0);
+	assert(al_errno == AL_ERRINVAL);
+	printf("init_invalid_arg: OK\n");
+
+	/* --- init: normal case --- */
+	s = al_stack_init(64);
+	assert(s.arena.base != NULL);
+	assert(s.arena.offset == 0);
+	assert(s.arena.capacity == 64);
+	assert(s.top == 0);
+	assert(al_errno == AL_OK);
+	printf("init_normal_case: OK\n");
+
+	/* --- alloc: invalid args --- */
+	p1 = al_stack_alloc(NULL, 8);
+	assert(p1 == NULL);
+	assert(al_errno == AL_ERRINVAL);
+
+	p1 = al_stack_alloc(&s, 0);
+	assert(p1 == NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("alloc_invalid_args: OK\n");
+
+	/* --- alloc: normal case --- */
+	p1 = al_stack_alloc(&s, 8);
+	assert(p1 != NULL);
+	assert(al_errno == AL_OK);
+	assert(s.arena.offset == 8);
+	printf("alloc_normal_case: OK\n");
+
+	/* --- push: invalid arg --- */
+	al_stack_push(NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("push_invalid_arg: OK\n");
+
+	/* --- push/pop: restore allocation mark --- */
+	saved = s.arena.offset;
+
+	al_stack_push(&s);
+	assert(s.top == 1);
+	assert(s.marks[0] == saved);
+	assert(al_errno == AL_OK);
+
+	p2 = al_stack_alloc(&s, 16);
+	assert(p2 != NULL);
+	assert(s.arena.offset > saved);
+
+	al_stack_pop(&s);
+	assert(s.top == 0);
+	assert(s.arena.offset == saved);
+	assert(al_errno == AL_OK);
+	printf("push_pop_restore_mark: OK\n");
+
+	/* --- pop: invalid arg --- */
+	al_stack_pop(NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("pop_invalid_arg: OK\n");
+
+	/* --- pop: underflow --- */
+	al_stack_pop(&s);
+	assert(al_errno == AL_ERRSTKUF);
+	printf("pop_underflow: OK\n");
+
+	/* --- push: overflow --- */
+	for (i = 0; i < AL_STACK_MAX_MARKS; ++i)
+		al_stack_push(&s);
+
+	assert(s.top == AL_STACK_MAX_MARKS);
+	assert(al_errno == AL_OK);
+
+	al_stack_push(&s);
+	assert(al_errno == AL_ERRSTKOF);
+	assert(s.top == AL_STACK_MAX_MARKS);
+	printf("push_overflow: OK\n");
+
+	/* --- free: normal case --- */
+	al_stack_free(&s);
+	assert(s.arena.base == NULL);
+	assert(s.arena.offset == 0);
+	assert(s.arena.capacity == 0);
+	assert(s.top == 0);
+	assert(al_errno == AL_OK);
+	printf("free_normal_case: OK\n");
+
+	/* --- free: double-free is a safe no-op --- */
+	al_stack_free(&s);
+	assert(al_errno == AL_OK);
+	printf("free_double_free_safe_noop: OK\n");
+
+	/* --- free: invalid arg --- */
+	al_stack_free(NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("free_invalid_arg: OK\n");
+
+	printf("all stack tests passed\n");
+}
+
 int main(void)
 {
-	test_floyd();
+	test_stack_alloc();
 	return 0;
 }

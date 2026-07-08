@@ -195,6 +195,8 @@ PQ_DECL int pqueue_empty(const pqueue_t *pq);
 #ifndef I_QUEUE_IMPLEMENTATION
 #define I_QUEUE_IMPLEMENTATION
 
+int que_err = 0;
+
 #if !((defined(QUE_MALLOC) == defined(QUE_FREE)) && (defined(QUE_FREE) == defined(QUE_REALLOC)))
 #error "You must either use the default allocator or provide all of: QUE_MALLOC, QUE_REALLOC and QUE_FREE"
 #endif

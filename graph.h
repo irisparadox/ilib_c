@@ -874,8 +874,8 @@ GRAPH_DECL graph_dijkstra_f_result_t wfdgraph_dijkstra_al(const wfdgraph_t *g, v
 #include "dsetuf.h"
 #endif /* DSUF_IMPLEMENTATION */
 
-PQ_DEFINE_CMP_FIELD_ASC(kruskal_cmpi, wedgei_t, weight);
-PQ_DEFINE_CMP_FIELD_ASC(kruskal_cmpf, wedgef_t, weight);
+PQ_DEFINE_CMP_FIELD_ASC(kruskal_cmpi, wedgei_t, weight)
+PQ_DEFINE_CMP_FIELD_ASC(kruskal_cmpf, wedgef_t, weight)
 
 GRAPH_DECL graph_kruskal_i_result_t wigraph_kruskal_al(const wigraph_t *g)
 {
