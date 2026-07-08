@@ -15,13 +15,13 @@
 #define I_ALLOC_USE_MMAP 0
 #endif /* ALLOC_F_FALLBACK == 0 */
 
-#define AL_OK       0
-#define AL_ERRNOMEM 1
-#define AL_ERRBCKFL 2
-#define AL_ERRINVAL 3
+#define AL_OK        0 /* OK */
+#define AL_ERRNOMEM  1 /* NO MEMORY AVAILABLE */
+#define AL_ERRBCKFL  2 /* BACKEND FAILED */
+#define AL_ERRINVAL  3 /* INVALID ARG */
 
-#define AL_ERRSTKOF 14
-#define AL_ERRSTKUF 15
+#define AL_ERRSTKOF 14 /* STACK OVERFLOW */
+#define AL_ERRSTKUF 15 /* STACK UNDERFLOW */
 
 #ifndef NULL
 #define NULL ((void *)0)
@@ -72,13 +72,59 @@ void        al_stack_push(al_stack_t *s);
 void        al_stack_pop(al_stack_t *s);
 void        al_stack_free(al_stack_t *s);
 
+#ifndef ALLOCAI_F_HEAP
+#define ALLOCAI_F_HEAP 0
+#endif /* ALLOCAI_F_HEAP */
+
+#if ALLOCAI_F_HEAP == 1
+
+#ifndef ALLOCAI_REGION_GROWTH
+#define ALLOCAI_REGION_GROWTH (4 * 1024 * 1024)
+#endif /* ALLOCAI_REGION_GROWTH */
+
+typedef struct ha_region ha_region_t;
+typedef struct ha_block  ha_block_t;
+
+struct ha_region {
+	void        *base;
+	al_size_t    size;
+
+	ha_region_t *next;
+	ha_block_t  *first;
+};
+
+struct ha_block {
+	al_size_t   size;
+	unsigned    free;
+	ha_block_t *next;
+	ha_block_t *prev;
+};
+
+typedef struct {
+	ha_region_t *regions;
+} ha_allocator_t;
+
+ha_allocator_t halloc_init(al_size_t );
+
+void *halloc(ha_allocator_t *h, al_size_t size);
+void *hcalloc(ha_allocator_t *h, al_size_t nmemb, al_size_t size);
+void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size);
+void  hfree(ha_allocator_t *h, void *ptr);
+
+#endif /* ALLOCAI_F_HEAP == 1 */
+
 #endif /* ALLOCAI_H */
 
-#define ALLOCAI_IMPLEMENTATION
+#if defined(ALLOCAI_IMPLEMENTATION) || defined(ALLOCAI_HEAP_IMPLEMENTATION)
+#ifndef I_ALLOCAI_ERRNO_GUARD
+#define I_ALLOCAI_ERRNO_GUARD
+int al_errno = AL_OK;
+#endif /* I_ALLOCAI_ERRNO_GUARD */
+#endif
+
+//#define ALLOCAI_IMPLEMENTATION
 #ifdef ALLOCAI_IMPLEMENTATION
 #ifndef I_ALLOCAI_IMPLEMENTATION
-
-int al_errno = AL_OK;
 
 #if (I_ALLOC_USE_MMAP == 0 || ALLOC_F_FALLBACK == 1)
 
@@ -98,7 +144,7 @@ int al_errno = AL_OK;
 
 #else
 #include <sys/mman.h>
-#endif /* I_ALLOC_USE_MMAP == 0 */
+#endif /* I_ALLOC_USE_MMAP == 0 || ALLOC_F_FALLBACK == 1 */
 
 void *al_memset(void *ptr, int c, al_size_t n)
 {
@@ -307,3 +353,259 @@ void al_stack_free(al_stack_t *s)
 
 #endif /* I_ALLOCAI_IMPLEMENTATION */
 #endif /* ALLOCAI_IMPLEMENTATION */
+
+//#define ALLOCAI_HEAP_IMPLEMENTATION
+#ifdef ALLOCAI_HEAP_IMPLEMENTATION
+#ifndef I_ALLOCAI_HEAP_IMPL
+#define I_ALLOCAI_HEAP_IMPL
+
+#if !(defined(ALLOCAI_MMAP) == defined(ALLOCAI_MUNMAP))
+#error "You must either not change the default memory manager or provide a valid API for ALLOCAI_MMAP and ALLOCAI_MUNMAP"
+#endif /* !(defined(ALLOCAI_MMAP) == defined(ALLOCAI_MUNMAP)) */
+
+#if !defined(ALLOCAI_MMAP) || !defined(ALLOCAI_MUNMAP)
+
+#include <sys/mman.h>
+
+#ifndef ALLOCAI_MMAP
+#define ALLOCAI_MMAP(len) mmap(NULL, (len), PROT_READ | PROT_WRITE, \
+				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+#endif /* ALLOCAI_MMAP */
+
+#ifndef ALLOCAI_MUNMAP
+#define ALLOCAI_MUNMAP(ptr, len) munmap((ptr), (len))
+#endif /* ALLOCAI_MUNMAP */
+
+#endif /* !defined(ALLOCAI_MMAP) || !defined(ALLOCAI_MUNMAP) */
+
+/* compile-time check: header sizes must be multiples of ALLOC_ALIGNMENT,
+ * or every user pointer handed out will silently be misaligned */
+typedef char i_halloc_check_region_align[
+	(sizeof(ha_region_t) % ALLOC_ALIGNMENT == 0) ? 1 : -1
+];
+typedef char i_halloc_check_block_align[
+	(sizeof(ha_block_t) % ALLOC_ALIGNMENT == 0) ? 1 : -1
+];
+
+static al_size_t i_halloc_align_up(al_size_t n)
+{
+	return (n + (ALLOC_ALIGNMENT - 1)) & ~(ALLOC_ALIGNMENT - 1);
+}
+
+static void *i_halloc_take(ha_block_t *b, al_size_t size)
+{
+	al_size_t remainder = b->size - size;
+
+	if (remainder > sizeof(ha_block_t)) {
+		ha_block_t *split = (ha_block_t *)((al_byte_t *)(b + 1) + size);
+		split->size = remainder - sizeof(ha_block_t);
+		split->free = 1;
+		split->next = b->next;
+		split->prev = b;
+		if (b->next != NULL) {
+			b->next->prev = split;
+		}
+		b->next = split;
+		b->size = size;
+	}
+
+	b->free  = 0;
+	al_errno = AL_OK;
+	return (void *)(b + 1);
+}
+
+static void *i_halloc_try(ha_allocator_t *h, al_size_t size)
+{
+	ha_region_t *r;
+	ha_block_t  *b;
+
+	for (r = h->regions; r != NULL; r = r->next) {
+		for (b = r->first; b != NULL; b = b->next) {
+			if (b->free && b->size >= size) {
+				return i_halloc_take(b, size);
+			}
+		}
+	}
+
+	return NULL;
+}
+
+static int i_halloc_grow(ha_allocator_t *h, al_size_t size)
+{
+	ha_region_t *new_region;
+	ha_block_t  *new_block;
+	al_size_t    region_size; 
+	al_size_t    grow_size;
+	void        *mem;
+
+	if (size > AL_SIZE_MAX - sizeof(ha_region_t) - sizeof(ha_block_t)) {
+		al_errno = AL_ERRNOMEM;
+		return 0;
+	}
+
+	region_size = size + sizeof(ha_region_t) + sizeof(ha_block_t);
+	grow_size   = region_size > ALLOCAI_REGION_GROWTH ?
+			region_size : ALLOCAI_REGION_GROWTH;
+
+	mem = ALLOCAI_MMAP(grow_size);
+	if (mem == NULL) {
+		al_errno = AL_ERRBCKFL;
+		return 0;
+	}
+
+	new_region = (ha_region_t *)mem;
+	new_region->base = mem;
+	new_region->size = grow_size;
+	new_region->next = h->regions;
+
+	new_block = (ha_block_t *)((al_byte_t *)mem + sizeof(ha_region_t));
+	new_block->size = grow_size - sizeof(ha_region_t) - sizeof(ha_block_t);
+	new_block->free = 1;
+	new_block->next = NULL;
+	new_block->prev = NULL;
+
+	new_region->first = new_block;
+	h->regions = new_region;
+
+	return 1;
+}
+
+ha_allocator_t halloc_init(al_size_t size)
+{
+	ha_allocator_t  h;
+	ha_region_t    *r;
+	ha_block_t     *b;
+
+	if (size == 0 || size <= sizeof(ha_region_t) + sizeof(ha_block_t)) {
+		al_errno  = AL_ERRINVAL;
+		h.regions = NULL;
+		return h;
+	}
+
+	// metadata lives at the start of mmap block
+	void *mem = ALLOCAI_MMAP(size);
+	if (mem == NULL) {
+		al_errno  = AL_ERRBCKFL;
+		h.regions = NULL;
+		return h;
+	}
+
+	r = (ha_region_t *)mem;
+	r->base = mem;
+	r->size = size;
+	r->next = NULL;
+
+	// the single free block covers everything after the region header
+	b = (ha_block_t *)((al_byte_t *)mem + sizeof(ha_region_t));
+	b->size = size - sizeof(ha_region_t) - sizeof(ha_block_t);
+	b->free = 1;
+	b->next = NULL;
+	b->prev = NULL;
+
+	r->first  = b;
+	h.regions = r;
+
+	al_errno = AL_OK;
+	return h;
+}
+
+void *halloc(ha_allocator_t *h, al_size_t size)
+{
+	void *found;
+
+	if (h == NULL || size == 0) {
+		al_errno = AL_ERRINVAL;
+		return NULL;
+	}
+
+	size = i_halloc_align_up(size);
+
+	found = i_halloc_try(h, size);
+	if (found != NULL) {
+		return found;
+	}
+
+	if (!i_halloc_grow(h, size)) {
+		return NULL;
+	}
+
+	return i_halloc_take(h->regions->first, size);
+}
+
+void *hcalloc(ha_allocator_t *h, al_size_t nmemb, al_size_t size)
+{
+	al_size_t  total;
+	void      *ptr;
+
+	if (nmemb != 0 && size > AL_SIZE_MAX / nmemb) {
+		al_errno = AL_ERRNOMEM;
+		return NULL;
+	}
+
+	total = nmemb * size;
+	ptr = halloc(h, total);
+	if (ptr == NULL) {
+		return NULL;
+	}
+
+	al_memset(ptr, 0, total);
+	al_errno = AL_OK;
+	return ptr;
+}
+
+void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size) //TODO
+{
+	return NULL;
+}
+
+void hfree(ha_allocator_t *h, void *ptr)
+{
+	ha_block_t *b;
+
+	if (h == NULL) {
+		al_errno = AL_ERRINVAL;
+		return;
+	}
+
+	if (ptr == NULL) {
+		al_errno = AL_OK;
+		return;
+	}
+
+	b = (ha_block_t *)ptr - 1;
+
+	if (b->free) {
+		al_errno = AL_ERRINVAL;
+		return;
+	}
+
+	b->free = 1;
+	al_errno = AL_OK;
+}
+
+#endif /* ALLOCAI_HEAP_IMPLEMENTATION */
+#endif /* I_ALLOCAI_HEAP_IMPL */
+
+/*
+ * MIT License
+ *
+ * Copyright (c) 2026 Gabriel Guillermo Saavedra Moreira
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */

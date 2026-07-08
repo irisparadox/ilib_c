@@ -190,12 +190,17 @@ PQ_DECL QUE_RET pqueue_pop(pqueue_t *pq);
 PQ_DECL int pqueue_empty(const pqueue_t *pq);
 #endif // QUEUE_H
 
+#if defined(QUEUE_IMPLEMENTATION) || defined(PQUEUE_IMPLEMENTATION)
+#ifndef I_QUE_ERRNO_GUARD
+#define I_QUE_ERRNO_GUARD
+int que_err = 0;
+#endif /* I_QUE_ERRNO_GUARD */
+#endif /* defined(QUEUE_IMPLEMENTATION) || defined(PQUEUE_IMPLEMENTATION) */
+
 //#define QUEUE_IMPLEMENTATION
 #ifdef QUEUE_IMPLEMENTATION
 #ifndef I_QUEUE_IMPLEMENTATION
 #define I_QUEUE_IMPLEMENTATION
-
-int que_err = 0;
 
 #if !((defined(QUE_MALLOC) == defined(QUE_FREE)) && (defined(QUE_FREE) == defined(QUE_REALLOC)))
 #error "You must either use the default allocator or provide all of: QUE_MALLOC, QUE_REALLOC and QUE_FREE"
