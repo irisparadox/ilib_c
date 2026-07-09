@@ -902,6 +902,35 @@ void test_hallocator(void)
 	assert(al_errno == AL_OK);
 	printf("free_normal_case: OK\n");
 
+	/* --- free: invalid allocator pointer --- */
+	hfree(NULL, p1);
+	assert(al_errno == AL_ERRINVAL);
+	printf("free_invalid_allocator: OK\n");
+
+	/* --- free: pointer outside allocator --- */
+	{
+	int dummy;
+	hfree(&h, &dummy);
+	assert(al_errno == AL_ERRINVAL);
+	}
+	printf("free_pointer_outside_region: OK\n");
+
+	/* --- free: interior pointer --- */
+	hfree(&h, (char *)p1 + 1);
+	assert(al_errno == AL_ERRINVAL);
+	printf("free_interior_pointer: OK\n");
+
+	/* --- free: double free --- */
+	p1 = halloc(&h, 32);
+	assert(al_errno == AL_OK);
+
+	hfree(&h, p1);
+	assert(al_errno == AL_OK);
+
+	hfree(&h, p1);
+	assert(al_errno == AL_ERRINVAL);
+	printf("free_double_free: OK\n");
+
 	/* --- reuse freed block --- */
 	p1 = halloc(&h, 32);
 	assert(p1 != NULL);

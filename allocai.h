@@ -74,7 +74,7 @@ void        al_stack_pop(al_stack_t *s);
 void        al_stack_free(al_stack_t *s);
 
 #ifndef ALLOC_F_HEAP
-#define ALLOC_F_HEAP 0
+#define ALLOC_F_HEAP 1
 #endif /* ALLOCAI_F_HEAP */
 
 #if ALLOC_F_HEAP == 1
@@ -87,10 +87,14 @@ void        al_stack_free(al_stack_t *s);
 #define AL_MIN_BLOCK_SIZE 2 * ALLOC_ALIGNMENT
 #endif /* AL_STACK_MAX_MARKS */
 
+#include "rbtree.h"
+
 typedef struct ha_region ha_region_t;
 typedef struct ha_block  ha_block_t;
 
 struct ha_region {
+	rb_node_t    rb;
+
 	void        *base;
 	al_size_t    size;
 
@@ -108,6 +112,7 @@ struct ha_block {
 
 typedef struct {
 	ha_region_t *regions;
+	rb_tree_t    rbt;
 } ha_allocator_t;
 
 ha_allocator_t halloc_init(al_size_t size);
@@ -400,6 +405,10 @@ void al_stack_free(al_stack_t *s)
 
 #endif /* !defined(ALLOCAI_MMAP) || !defined(ALLOCAI_MUNMAP) */
 
+#include "deftypei.h"
+#define RBTREE_IMPLEMENTATION
+#include "rbtree.h"
+
 #define BLOCK_MAGIC 0x4D4A4D4A /* MJMJ */
 
 /* compile-time check: header sizes must be multiples of ALLOC_ALIGNMENT,
@@ -410,6 +419,25 @@ typedef char i_halloc_check_region_align[
 typedef char i_halloc_check_block_align[
 	(sizeof(ha_block_t) % ALLOC_ALIGNMENT == 0) ? 1 : -1
 ];
+
+int region_cmp(const rb_node_t *a, const rb_node_t *b)
+{
+	const ha_region_t *ra = RB_CONTAINER(a, ha_region_t, rb);
+	const ha_region_t *rb = RB_CONTAINER(b, ha_region_t, rb);
+
+	return (ra->base > rb->base) - (ra->base < rb->base);
+}
+
+int region_key_cmp(const void *key, const rb_node_t *node)
+{
+	ilib_uintptr_t addr = (ilib_uintptr_t)key;
+	const ha_region_t *r = RB_CONTAINER(node, ha_region_t, rb);
+
+	ilib_uintptr_t begin = (ilib_uintptr_t)r->base;
+	ilib_uintptr_t end   = begin + r->size;
+
+	return (addr >= end) - (addr < begin);
+}
 
 static al_size_t i_halloc_align_up(al_size_t n)
 {
@@ -493,6 +521,8 @@ static int i_halloc_grow(ha_allocator_t *h, al_size_t size)
 	new_region->first = new_block;
 	h->regions = new_region;
 
+	rb_insert(&h->rbt, &new_region->rb);
+
 	return 1;
 }
 
@@ -531,6 +561,9 @@ ha_allocator_t halloc_init(al_size_t size)
 
 	r->first  = b;
 	h.regions = r;
+
+	rb_init(&h.rbt, region_cmp, region_key_cmp);
+	rb_insert(&h.rbt, &r->rb);
 
 	al_errno = AL_OK;
 	return h;
@@ -667,6 +700,13 @@ void hfree(ha_allocator_t *h, void *ptr)
 
 	if (ptr == NULL) {
 		al_errno = AL_OK;
+		return;
+	}
+
+	rb_node_t *reg = rb_search(&h->rbt, ptr);
+
+	if (reg == NULL) {
+		al_errno = AL_ERRINVAL;
 		return;
 	}
 
