@@ -59,6 +59,7 @@ typedef struct {
 } al_stack_t;
 
 void *al_memset(void *ptr, int c, al_size_t n);
+void *al_memcpy(void *restrict dest, const void *restrict src, al_size_t n);
 
 al_arena_t  al_arena_init(al_size_t capacity);
 al_byte_t  *al_arena_alloc(al_arena_t *a, al_size_t size);
@@ -72,15 +73,19 @@ void        al_stack_push(al_stack_t *s);
 void        al_stack_pop(al_stack_t *s);
 void        al_stack_free(al_stack_t *s);
 
-#ifndef ALLOCAI_F_HEAP
-#define ALLOCAI_F_HEAP 0
+#ifndef ALLOC_F_HEAP
+#define ALLOC_F_HEAP 0
 #endif /* ALLOCAI_F_HEAP */
 
-#if ALLOCAI_F_HEAP == 1
+#if ALLOC_F_HEAP == 1
 
 #ifndef ALLOCAI_REGION_GROWTH
 #define ALLOCAI_REGION_GROWTH (4 * 1024 * 1024)
 #endif /* ALLOCAI_REGION_GROWTH */
+
+#ifndef AL_MIN_BLOCK_SIZE 
+#define AL_MIN_BLOCK_SIZE 2 * ALLOC_ALIGNMENT
+#endif /* AL_STACK_MAX_MARKS */
 
 typedef struct ha_region ha_region_t;
 typedef struct ha_block  ha_block_t;
@@ -95,6 +100,7 @@ struct ha_region {
 
 struct ha_block {
 	al_size_t   size;
+	unsigned    magic;
 	unsigned    free;
 	ha_block_t *next;
 	ha_block_t *prev;
@@ -104,14 +110,15 @@ typedef struct {
 	ha_region_t *regions;
 } ha_allocator_t;
 
-ha_allocator_t halloc_init(al_size_t );
+ha_allocator_t halloc_init(al_size_t size);
+void           halloc_destroy(ha_allocator_t *h);
 
 void *halloc(ha_allocator_t *h, al_size_t size);
 void *hcalloc(ha_allocator_t *h, al_size_t nmemb, al_size_t size);
 void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size);
 void  hfree(ha_allocator_t *h, void *ptr);
 
-#endif /* ALLOCAI_F_HEAP == 1 */
+#endif /* ALLOC_F_HEAP == 1 */
 
 #endif /* ALLOCAI_H */
 
@@ -120,6 +127,32 @@ void  hfree(ha_allocator_t *h, void *ptr);
 #define I_ALLOCAI_ERRNO_GUARD
 int al_errno = AL_OK;
 #endif /* I_ALLOCAI_ERRNO_GUARD */
+
+#ifndef I_ALLOCAI_MEMOP_GUARD
+#define I_ALLOCAI_MEMOP_GUARD
+void *al_memset(void *ptr, int c, al_size_t n)
+{
+	al_byte_t *_ptr = (al_byte_t *)ptr;
+
+	while (n--) {
+		*_ptr++ = (al_byte_t)c;
+	}
+
+	return ptr;
+}
+
+void *al_memcpy(void *restrict dest, const void *restrict src, al_size_t n)
+{
+	unsigned char *d = dest;
+	const unsigned char *s = src;
+
+	while (n--) {
+		*d++ = *s++;
+	}
+
+	return dest;
+}
+#endif /* I_ALLOCAI_MEMOP_GUARD */
 #endif
 
 //#define ALLOCAI_IMPLEMENTATION
@@ -145,17 +178,6 @@ int al_errno = AL_OK;
 #else
 #include <sys/mman.h>
 #endif /* I_ALLOC_USE_MMAP == 0 || ALLOC_F_FALLBACK == 1 */
-
-void *al_memset(void *ptr, int c, al_size_t n)
-{
-	al_byte_t *_ptr = (al_byte_t *)ptr;
-
-	while (n--) {
-		*_ptr++ = (al_byte_t)c;
-	}
-
-	return ptr;
-}
 
 al_arena_t al_arena_init(al_size_t capacity)
 {
@@ -378,6 +400,8 @@ void al_stack_free(al_stack_t *s)
 
 #endif /* !defined(ALLOCAI_MMAP) || !defined(ALLOCAI_MUNMAP) */
 
+#define BLOCK_MAGIC 0x4D4A4D4A /* MJMJ */
+
 /* compile-time check: header sizes must be multiples of ALLOC_ALIGNMENT,
  * or every user pointer handed out will silently be misaligned */
 typedef char i_halloc_check_region_align[
@@ -396,12 +420,13 @@ static void *i_halloc_take(ha_block_t *b, al_size_t size)
 {
 	al_size_t remainder = b->size - size;
 
-	if (remainder > sizeof(ha_block_t)) {
+	if (remainder >= sizeof(ha_block_t) + AL_MIN_BLOCK_SIZE) {
 		ha_block_t *split = (ha_block_t *)((al_byte_t *)(b + 1) + size);
-		split->size = remainder - sizeof(ha_block_t);
-		split->free = 1;
-		split->next = b->next;
-		split->prev = b;
+		split->size  = remainder - sizeof(ha_block_t);
+		split->magic = BLOCK_MAGIC;
+		split->free  = 1;
+		split->next  = b->next;
+		split->prev  = b;
 		if (b->next != NULL) {
 			b->next->prev = split;
 		}
@@ -460,9 +485,10 @@ static int i_halloc_grow(ha_allocator_t *h, al_size_t size)
 
 	new_block = (ha_block_t *)((al_byte_t *)mem + sizeof(ha_region_t));
 	new_block->size = grow_size - sizeof(ha_region_t) - sizeof(ha_block_t);
-	new_block->free = 1;
-	new_block->next = NULL;
-	new_block->prev = NULL;
+	new_block->magic = BLOCK_MAGIC;
+	new_block->free  = 1;
+	new_block->next  = NULL;
+	new_block->prev  = NULL;
 
 	new_region->first = new_block;
 	h->regions = new_region;
@@ -498,6 +524,7 @@ ha_allocator_t halloc_init(al_size_t size)
 	// the single free block covers everything after the region header
 	b = (ha_block_t *)((al_byte_t *)mem + sizeof(ha_region_t));
 	b->size = size - sizeof(ha_region_t) - sizeof(ha_block_t);
+	b->magic = BLOCK_MAGIC;
 	b->free = 1;
 	b->next = NULL;
 	b->prev = NULL;
@@ -507,6 +534,27 @@ ha_allocator_t halloc_init(al_size_t size)
 
 	al_errno = AL_OK;
 	return h;
+}
+
+void halloc_destroy(ha_allocator_t *h)
+{
+	ha_region_t *r;
+	ha_region_t *next;
+
+	if (h == NULL) {
+		al_errno = AL_ERRINVAL;
+		return;
+	}
+
+	r = h->regions;
+	while (r != NULL) {
+		next = r->next;
+		ALLOCAI_MUNMAP(r->base, r->size);
+		r = next;
+	}
+
+	h->regions = NULL;
+	al_errno = AL_OK;
 }
 
 void *halloc(ha_allocator_t *h, al_size_t size)
@@ -553,9 +601,59 @@ void *hcalloc(ha_allocator_t *h, al_size_t nmemb, al_size_t size)
 	return ptr;
 }
 
-void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size) //TODO
+void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size)
 {
-	return NULL;
+	ha_block_t *b;
+	void       *new_ptr;
+	al_size_t   copy_size;
+
+	if (h == NULL) {
+		al_errno = AL_ERRINVAL;
+		return NULL;
+	}
+
+	if (ptr == NULL) {
+		return halloc(h, size);
+	}
+
+	if (size == 0) {
+		hfree(h, ptr);
+		return NULL;
+	}
+
+	size = i_halloc_align_up(size);
+
+	b = (ha_block_t *)ptr - 1;
+
+	if (b->size >= size) {
+		al_errno = AL_OK;
+		return ptr;
+	}
+
+	if (b->next != NULL && b->next->free &&
+	    b->size + sizeof(ha_block_t) + b->next->size >= size) {
+		ha_block_t *r = b->next;
+
+		b->size += sizeof(ha_block_t) + r->size;
+		b->next  = r->next;
+		if (r->next != NULL) {
+			r->next->prev = b;
+		}
+
+		return i_halloc_take(b, size);
+	}
+
+	new_ptr = halloc(h, size);
+	if (new_ptr == NULL) {
+		return NULL;
+	}
+
+	copy_size = b->size;
+	al_memcpy(new_ptr, ptr, copy_size);
+	hfree(h, ptr);
+
+	al_errno = AL_OK;
+	return new_ptr;
 }
 
 void hfree(ha_allocator_t *h, void *ptr)
@@ -574,12 +672,37 @@ void hfree(ha_allocator_t *h, void *ptr)
 
 	b = (ha_block_t *)ptr - 1;
 
-	if (b->free) {
+	if (b->magic != BLOCK_MAGIC || b->free) {
 		al_errno = AL_ERRINVAL;
 		return;
 	}
 
 	b->free = 1;
+
+	ha_block_t *r = b->next;
+	ha_block_t *l = b->prev;
+	if (r != NULL && r->free) {
+		b->size += r->size + sizeof(ha_block_t);
+		b->next  = r->next;
+		if (r->next != NULL) {
+			r->next->prev = b;
+		}
+		r->size = 0;
+		r->next = NULL;
+		r->prev = NULL;
+	}
+
+	if (l != NULL && l->free) {
+		l->size += b->size + sizeof(ha_block_t);
+		l->next = b->next;
+		if (b->next != NULL) {
+			b->next->prev = l;
+		}
+		b->size = 0;
+		b->next = NULL;
+		b->prev = NULL;
+	}
+
 	al_errno = AL_OK;
 }
 

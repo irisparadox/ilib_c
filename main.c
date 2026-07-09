@@ -13,6 +13,8 @@
 #include "queue.h"
 
 #define ALLOCAI_IMPLEMENTATION
+#define ALLOC_F_HEAP 1
+#define ALLOCAI_HEAP_IMPLEMENTATION
 #include "allocai.h"
 
 void vectest()
@@ -842,8 +844,117 @@ void test_stack_alloc(void)
 	printf("all stack tests passed\n");
 }
 
+void test_hallocator(void)
+{
+	ha_allocator_t h;
+	void *p1, *p2, *p3;
+
+	/* --- init: invalid arg --- */
+	h = halloc_init(0);
+	assert(h.regions == NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("init_invalid_arg: OK\n");
+
+	/* --- init: normal case --- */
+	h = halloc_init(4096);
+	assert(h.regions != NULL);
+	assert(al_errno == AL_OK);
+	printf("init_normal_case: OK\n");
+
+	/* --- alloc: invalid args --- */
+	p1 = halloc(NULL, 16);
+	assert(p1 == NULL);
+	assert(al_errno == AL_ERRINVAL);
+
+	p1 = halloc(&h, 0);
+	assert(p1 == NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("alloc_invalid_args: OK\n");
+
+	/* --- alloc: normal case --- */
+	p1 = halloc(&h, 32);
+	assert(p1 != NULL);
+	assert(al_errno == AL_OK);
+	printf("alloc_normal_case: OK\n");
+
+	/* --- multiple allocations --- */
+	p2 = halloc(&h, 64);
+	p3 = halloc(&h, 128);
+
+	assert(p2 != NULL);
+	assert(p3 != NULL);
+	assert(al_errno == AL_OK);
+	printf("multiple_allocations: OK\n");
+
+	/* --- free: NULL is a no-op --- */
+	hfree(&h, NULL);
+	assert(al_errno == AL_OK);
+	printf("free_null: OK\n");
+
+	/* --- free: normal case --- */
+	hfree(&h, p2);
+	assert(al_errno == AL_OK);
+
+	hfree(&h, p1);
+	assert(al_errno == AL_OK);
+
+	hfree(&h, p3);
+	assert(al_errno == AL_OK);
+	printf("free_normal_case: OK\n");
+
+	/* --- reuse freed block --- */
+	p1 = halloc(&h, 32);
+	assert(p1 != NULL);
+	assert(al_errno == AL_OK);
+	printf("reuse_freed_block: OK\n");
+
+	/* --- realloc: NULL behaves as alloc --- */
+	p2 = hrealloc(&h, NULL, 64);
+	assert(p2 != NULL);
+	assert(al_errno == AL_OK);
+	printf("realloc_null: OK\n");
+
+	/* --- realloc: size 0 behaves as free --- */
+	p3 = hrealloc(&h, p2, 0);
+	assert(p3 == NULL);
+	assert(al_errno == AL_OK);
+	printf("realloc_zero: OK\n");
+
+	/* --- realloc: grow --- */
+	p1 = hrealloc(&h, p1, 256);
+	assert(p1 != NULL);
+	assert(al_errno == AL_OK);
+	printf("realloc_grow: OK\n");
+
+	/* --- realloc: shrink (currently no-op) --- */
+	p2 = hrealloc(&h, p1, 16);
+	assert(p2 == p1);
+	assert(al_errno == AL_OK);
+	printf("realloc_shrink_noop: OK\n");
+
+	hfree(&h, p1);
+
+	/* --- destroy --- */
+	halloc_destroy(&h);
+	assert(h.regions == NULL);
+	assert(al_errno == AL_OK);
+	printf("destroy_normal_case: OK\n");
+
+	/* --- destroy: safe no-op --- */
+	halloc_destroy(&h);
+	assert(al_errno == AL_OK);
+	printf("destroy_double_destroy_safe_noop: OK\n");
+
+	/* --- destroy: invalid arg --- */
+	halloc_destroy(NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("destroy_invalid_arg: OK\n");
+
+	printf("all heap allocator tests passed\n");
+}
+
 int main(void)
 {
-	test_stack_alloc();
+	test_hallocator();
 	return 0;
 }
