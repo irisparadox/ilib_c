@@ -526,6 +526,18 @@ static int i_halloc_grow(ha_allocator_t *h, al_size_t size)
 	return 1;
 }
 
+static int i_halloc_validate_ptr(ha_allocator_t *h, void *ptr)
+{
+	rb_node_t *reg = rb_search(&h->rbt, ptr);
+	
+	if (reg == NULL) {
+		al_errno = AL_ERRINVAL;
+		return 0;
+	}
+
+	return 1;
+}
+
 ha_allocator_t halloc_init(al_size_t size)
 {
 	ha_allocator_t  h;
@@ -654,6 +666,8 @@ void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size)
 		return NULL;
 	}
 
+	if (!i_halloc_validate_ptr(h, ptr)) return NULL;
+
 	size = i_halloc_align_up(size);
 
 	b = (ha_block_t *)ptr - 1;
@@ -703,12 +717,7 @@ void hfree(ha_allocator_t *h, void *ptr)
 		return;
 	}
 
-	rb_node_t *reg = rb_search(&h->rbt, ptr);
-
-	if (reg == NULL) {
-		al_errno = AL_ERRINVAL;
-		return;
-	}
+	if (!i_halloc_validate_ptr(h, ptr)) return;
 
 	b = (ha_block_t *)ptr - 1;
 
