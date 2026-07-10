@@ -880,11 +880,20 @@ void test_hallocator(void)
 	/* --- multiple allocations --- */
 	p2 = halloc(&h, 64);
 	p3 = halloc(&h, 128);
-
 	assert(p2 != NULL);
 	assert(p3 != NULL);
 	assert(al_errno == AL_OK);
 	printf("multiple_allocations: OK\n");
+
+	/* --- alloc: region growth --- */
+	{
+		void *big = halloc(&h, 8192);
+		assert(big != NULL);
+		assert(al_errno == AL_OK);
+		hfree(&h, big);
+		assert(al_errno == AL_OK);
+	}
+	printf("alloc_triggers_region_growth: OK\n");
 
 	/* --- free: NULL is a no-op --- */
 	hfree(&h, NULL);
@@ -894,10 +903,8 @@ void test_hallocator(void)
 	/* --- free: normal case --- */
 	hfree(&h, p2);
 	assert(al_errno == AL_OK);
-
 	hfree(&h, p1);
 	assert(al_errno == AL_OK);
-
 	hfree(&h, p3);
 	assert(al_errno == AL_OK);
 	printf("free_normal_case: OK\n");
@@ -909,33 +916,79 @@ void test_hallocator(void)
 
 	/* --- free: pointer outside allocator --- */
 	{
-	int dummy;
-	hfree(&h, &dummy);
-	assert(al_errno == AL_ERRINVAL);
+		int dummy;
+		hfree(&h, &dummy);
+		assert(al_errno == AL_ERRINPTR);
 	}
 	printf("free_pointer_outside_region: OK\n");
 
 	/* --- free: interior pointer --- */
-	hfree(&h, (char *)p1 + 1);
-	assert(al_errno == AL_ERRINVAL);
-	printf("free_interior_pointer: OK\n");
-
-	/* --- free: double free --- */
+	/* interior pointers still fall inside a known region, so the
+	* tree lookup succeeds; they are caught by the magic check
+	* instead, since the header read lands at the wrong offset */
 	p1 = halloc(&h, 32);
 	assert(al_errno == AL_OK);
+	hfree(&h, (char *)p1 + 1);
+	assert(al_errno == AL_ERRMGCHK);
+	printf("free_interior_pointer: OK\n");
 
+	/* --- free: double free reports AL_ERRAGAIN, not AL_ERRMGCHK --- */
 	hfree(&h, p1);
 	assert(al_errno == AL_OK);
-
 	hfree(&h, p1);
-	assert(al_errno == AL_ERRINVAL);
+	assert(al_errno == AL_ERRAGAIN);
 	printf("free_double_free: OK\n");
+
+	/* --- free: corrupted magic reports AL_ERRMGCHK --- */
+	{
+		void      *p4 = halloc(&h, 32);
+		ha_block_t *b4;
+
+		assert(p4 != NULL);
+		assert(al_errno == AL_OK);
+
+		b4 = (ha_block_t *)p4 - 1;
+		b4->magic = 0xDEADBEEF;
+
+		hfree(&h, p4);
+		assert(al_errno == AL_ERRMGCHK);
+
+		/* restore magic so later coalescing/teardown logic
+		 * does not misinterpret this block */
+		b4->magic = BLOCK_MAGIC;
+		b4->free  = 1;
+	}
+	printf("free_corrupted_magic: OK\n");
 
 	/* --- reuse freed block --- */
 	p1 = halloc(&h, 32);
 	assert(p1 != NULL);
 	assert(al_errno == AL_OK);
 	printf("reuse_freed_block: OK\n");
+
+	/* --- calloc: invalid args (overflow guard) --- */
+	{
+		void *big = hcalloc(&h, (al_size_t)-1, 2);
+		assert(big == NULL);
+		assert(al_errno == AL_ERRNOMEM);
+	}
+	printf("calloc_overflow_guard: OK\n");
+
+	/* --- calloc: normal case, memory is zeroed --- */
+	{
+		unsigned char *z = hcalloc(&h, 8, sizeof(unsigned char));
+		int            i;
+
+		assert(z != NULL);
+		assert(al_errno == AL_OK);
+
+		for (i = 0; i < 8; i++)
+			assert(z[i] == 0);
+
+		hfree(&h, z);
+		assert(al_errno == AL_OK);
+	}
+	printf("calloc_normal_case: OK\n");
 
 	/* --- realloc: NULL behaves as alloc --- */
 	p2 = hrealloc(&h, NULL, 64);
@@ -948,6 +1001,21 @@ void test_hallocator(void)
 	assert(p3 == NULL);
 	assert(al_errno == AL_OK);
 	printf("realloc_zero: OK\n");
+
+	/* --- realloc: invalid allocator pointer --- */
+	p3 = hrealloc(NULL, p1, 64);
+	assert(p3 == NULL);
+	assert(al_errno == AL_ERRINVAL);
+	printf("realloc_invalid_allocator: OK\n");
+
+	/* --- realloc: pointer outside allocator --- */
+	{
+		int dummy;
+		void *r = hrealloc(&h, &dummy, 64);
+		assert(r == NULL);
+		assert(al_errno == AL_ERRINPTR);
+	}
+	printf("realloc_invalid_ptr: OK\n");
 
 	/* --- realloc: grow --- */
 	p1 = hrealloc(&h, p1, 256);
@@ -962,6 +1030,7 @@ void test_hallocator(void)
 	printf("realloc_shrink_noop: OK\n");
 
 	hfree(&h, p1);
+	assert(al_errno == AL_OK);
 
 	/* --- destroy --- */
 	halloc_destroy(&h);

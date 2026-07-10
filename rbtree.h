@@ -90,8 +90,8 @@ struct rb_node {
 	rb_color_t color;
 };
 
-typedef int (*rb_cmp_t)(const rb_node_t *key, const rb_node_t *r);
-typedef int (*rb_key_cmp_t)(const void *key, const rb_node_t *r);
+typedef int (*rb_cmp_t)(const rb_node_t *a, const rb_node_t *b);
+typedef int (*rb_key_cmp_t)(const void *key, const rb_node_t *n);
 
 typedef struct {
 	rb_node_t    *root;
@@ -113,6 +113,8 @@ RBTREE_DECL rb_node_t *rb_predecessor(rb_node_t *t);
 
 //#define RBTREE_IMPLEMENTATION
 #ifdef RBTREE_IMPLEMENTATION
+#ifndef I_RBTREE_IMPL
+#define I_RBTREE_IMPL
 
 static rb_node_t rb_nil = { &rb_nil, &rb_nil, &rb_nil, RB_BLACK };
 
@@ -373,7 +375,7 @@ RBTREE_DECL rb_node_t *rb_search(const rb_tree_t *t, const void *key)
 			curr = curr->right;
 	}
 
-	return curr;
+	return curr == &rb_nil ? NULL : curr;
 }
 
 RBTREE_DECL rb_node_t *rb_minimum(rb_node_t *t)
@@ -426,6 +428,7 @@ RBTREE_DECL rb_node_t *rb_predecessor(rb_node_t *node)
 	return prnt == &rb_nil ? NULL : prnt;
 }
 
+#endif /* I_RBTREE_IMPL */
 #endif /* RBTREE_IMPLEMENTATION */
 
 /*

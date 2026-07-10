@@ -1,0 +1,412 @@
+.Dd 2026-07-10
+.Dt rbtree 7
+.Os
+.Sh NAME
+.Nm rbtree
+.Nd intrusive red-black tree module
+.Sh LIBRARY
+IRIS C Library
+.Pq Vt ilib_c
+.Sh DESCRIPTION
+Intrusive balanced binary search tree implementing a
+.Sy red-black
+tree, derived from Bayer's symmetric binary B-trees and later
+formalized by Guibas and Sedgewick.
+Maintains
+.Sy O(log n)
+search, insertion, and deletion by preserving a bounded black-height
+across all root-to-leaf paths, using recoloring and rotations to
+restore balance after mutation.
+.Pp
+Nodes are
+.Sy intrusive :
+each object embeds an
+.Vt rb_node_t
+member, and the tree never allocates or frees the objects it stores.
+Recover the containing object from a node pointer with
+.Fn RB_CONTAINER .
+.Pp
+The tree maintains the following invariants:
+.Bl -bullet
+.It
+Every node is colored either red or black.
+.It
+The root is always black.
+.It
+All leaves (represented by the sentinel
+.Va rb_nil )
+are black.
+.It
+A red node never has a red child
+.Pq no two consecutive red nodes on any path .
+.It
+Every path from a given node to any descendant leaf contains the
+same number of black nodes
+.Pq the node's black-height .
+.El
+.Pp
+These invariants bound the height of the tree to
+.Sy 2*log2(n+1) ,
+which guarantees worst-case logarithmic time for all operations.
+.Pp
+A single shared sentinel node,
+.Va rb_nil ,
+represents all leaves and the parent of the root.
+Callers must not dereference
+.Va rb_nil
+as if it were a live object; it exists purely to eliminate
+null-pointer special cases in the insertion and deletion logic.
+.Pp
+Insertion performs at most
+.Sy 2
+rotations to restore balance; deletion performs at most
+.Sy 3 .
+Recoloring may propagate toward the root but does not itself cost
+more than
+.Sy O(log n)
+per operation.
+.Pp
+The tree is generic over key type through two caller-supplied
+comparators:
+.Bd -literal -offset 4n
+typedef int (*rb_cmp_t)(const rb_node_t *a, const rb_node_t *b);
+typedef int (*rb_key_cmp_t)(const void *key, const rb_node_t *n);
+.Ed
+.Pp
+Both comparators must impose a total order consistent with
+.Xr qsort 3
+semantics
+.Pq negative, zero, or positive for less-than, equal, and greater-than .
+Splitting the two roles allows
+.Fn rb_search
+to accept a raw key
+.Pq e.g. an integer or string
+without requiring the caller to construct a dummy node just to
+compare against one.
+.Ss Node structure
+.Bd -literal
+typedef struct rb_node rb_node_t;
+
+struct rb_node {
+	rb_node_t *parent;
+	rb_node_t *left;
+	rb_node_t *right;
+
+	rb_color_t color;
+};
+.Ed
+.Pp
+.Bl -tag -width "parent" -compact
+.It Va parent
+Pointer to the parent node.
+The root's parent is
+.Va rb_nil .
+.It Va left
+Pointer to the left child.
+Leaf children point to
+.Va rb_nil .
+.It Va right
+Pointer to the right child.
+Leaf children point to
+.Va rb_nil .
+.It Va color
+Node color, either
+.Dv RB_RED
+or
+.Dv RB_BLACK .
+.El
+.Pp
+Callers embed
+.Vt rb_node_t
+inside their own structure and use
+.Fn RB_CONTAINER
+to recover the enclosing object from a node pointer.
+.Ss Tree structure
+.Bd -literal
+typedef struct {
+	rb_node_t    *root;
+	rb_cmp_t      cmp;
+	rb_key_cmp_t  kcmp;
+} rb_tree_t;
+.Ed
+.Pp
+.Bl -tag -width "kcmp" -compact
+.It Va root
+Pointer to the root node, or
+.Va rb_nil
+if the tree is empty.
+.It Va cmp
+Node-to-node comparator, used during insertion.
+.It Va kcmp
+Key-to-node comparator, used by
+.Fn rb_search .
+.El
+.Ss Feature and Implementation Macros
+The header exposes three preprocessor hooks that control linkage and
+compilation.
+.Bl -tag
+.It Sy RBTREE_DECL
+Controls the linkage of all declared functions.
+If left undefined, it expands to
+.Sy static inline ,
+matching the single-header, header-only default.
+Define it before including the header to override the linkage
+.Pq e.g. to Sy extern for a multi-translation-unit build .
+.It Fn RB_CONTAINER ptr type member
+Recovers a pointer to the enclosing object given a pointer to its
+embedded
+.Vt rb_node_t
+member.
+Computed as
+.Pp
+.Bd -literal -offset 4n
+((type *)((char *)(ptr) - ILIB_OFFSETOF(type, member)))
+.Ed
+.Pp
+.Fa ptr
+must point to a live
+.Vt rb_node_t
+embedded in an object of
+.Fa type ;
+.Fa member
+is the name of that embedded field.
+Passing
+.Va rb_nil
+or a dangling pointer is undefined behavior.
+.It Sy RBTREE_IMPLEMENTATION
+Include guard for the implementation.
+Function bodies are compiled only in translation units that define
+.Sy RBTREE_IMPLEMENTATION
+before including the header.
+The implementation block is internally guarded against
+double-inclusion within the same translation unit.
+.El
+.Ss The Application Programing Interface
+.Bl -tag
+.It Fn rb_init "rb_tree_t *t" "rb_cmp_t cmp" "rb_key_cmp_t kcmp"
+Initializes
+.Fa t
+as an empty tree, storing
+.Fa cmp
+and
+.Fa kcmp
+for later use by
+.Fn rb_insert
+and
+.Fn rb_search ,
+respectively.
+Must be called before any other operation on
+.Fa t .
+.It Fn rb_insert "rb_tree_t *t" "rb_node_t *node"
+Inserts
+.Fa node
+into
+.Fa t ,
+using
+.Fa cmp
+to locate its position, then restores the red-black invariants via
+recoloring and rotation.
+.It Fn rb_delete "rb_tree_t *t" "rb_node_t *node"
+Removes
+.Fa node
+from
+.Fa t
+and restores the red-black invariants.
+.Fa node
+must already be present in
+.Fa t .
+.It Fn rb_search "const rb_tree_t *t" "const void *key"
+Searches
+.Fa t
+for a node matching
+.Fa key ,
+using
+.Fa kcmp
+for comparison.
+Invalid arguments
+.Pq a Dv NULL Fa t No or Fa key
+are rejected without dereferencing either pointer.
+A search that reaches a leaf without matching
+.Fa key
+terminates without dereferencing the sentinel.
+.It Fn rb_minimum "rb_node_t *t"
+Walks left from
+.Fa t
+to locate the node with the smallest key in the subtree rooted at
+.Fa t .
+.It Fn rb_maximum "rb_node_t *t"
+Walks right from
+.Fa t
+to locate the node with the largest key in the subtree rooted at
+.Fa t .
+.It Fn rb_successor "rb_node_t *t"
+Locates the in-order successor of
+.Fa t
+within the tree.
+If
+.Fa t
+has a right subtree, the successor is the minimum of that subtree;
+otherwise the search walks up through ancestors until it finds one
+reached from its left child.
+.It Fn rb_predecessor "rb_node_t *t"
+Locates the in-order predecessor of
+.Fa t
+within the tree.
+If
+.Fa t
+has a left subtree, the predecessor is the maximum of that subtree;
+otherwise the search walks up through ancestors until it finds one
+reached from its right child.
+.El
+.Sh STANDARDS
+.Bl -tag -width Ds -compact
+.It Fn rb_init
+.It Fn rb_insert
+.It Fn rb_delete
+.It Fn rb_search
+.It Fn rb_minimum
+.It Fn rb_maximum
+.It Fn rb_successor
+.It Fn rb_predecessor
+.El
+.D1 St -isoC-99
+.Sh NOTES
+The tree does not track its own cardinality.
+Callers that need a count are expected to maintain one alongside
+their own management of object lifetime.
+.Pp
+.Fn rb_search
+does not distinguish an invalid call
+.Pq Dv NULL Fa t No or Fa key
+from a valid search that finds nothing; both are reported the same
+way.
+(See
+.Xr rb_search 3
+for the exact values used to signal each case.)
+.Pp
+.Fn rb_minimum ,
+.Fn rb_maximum ,
+.Fn rb_successor ,
+and
+.Fn rb_predecessor
+take a
+.Vt rb_node_t
+pointer rather than a
+.Vt rb_tree_t
+pointer, and operate relative to the given node rather than the
+tree as a whole.
+All four reject
+.Dv NULL
+and
+.Va rb_nil
+as arguments without walking the tree.
+.Fn rb_successor
+and
+.Fn rb_predecessor
+also signal the boundary case where no further node exists
+.Pq e.g. Fn rb_successor No on the maximum node
+the same way they signal an invalid argument; consult
+.Xr rb_successor 3
+and
+.Xr rb_predecessor 3
+for the exact values used.
+.Pp
+.Fn RB_CONTAINER
+performs no type checking.
+Passing a
+.Fa ptr
+that does not point to an
+.Vt rb_node_t
+embedded in
+.Fa type
+is undefined behavior.
+.Pp
+None of the functions in this API are thread-safe.
+Concurrent access to the same
+.Vt rb_tree_t
+from multiple threads, where at least one access is a mutation,
+requires external synchronization.
+.Sh EXAMPLES
+.Pp
+The following program builds a small red-black tree of integer-keyed
+items, using
+.Nm
+to insert, search, and walk the tree in sorted order via repeated
+calls to
+.Fn rb_successor .
+.Bl -tag -width -5n -offset -6n
+.It Sy Example Red-Black Tree program
+.El
+.Bl -tag -width 0
+.El
+.Bd -literal
+#include <stdio.h>
+
+#define RBTREE_IMPLEMENTATION
+#include "rbtree.h"
+
+typedef struct {
+	int        key;
+	rb_node_t  node;
+} item_t;
+
+static int item_cmp(const rb_node_t *a, const rb_node_t *b)
+{
+	item_t *ia = RB_CONTAINER(a, item_t, node);
+	item_t *ib = RB_CONTAINER(b, item_t, node);
+
+	return ia->key - ib->key;
+}
+
+static int item_key_cmp(const void *key, const rb_node_t *n)
+{
+	int    k = *(const int *)key;
+	item_t *i = RB_CONTAINER(n, item_t, node);
+
+	return k - i->key;
+}
+
+int main(int argc, char **argv)
+{
+	rb_tree_t t;
+	item_t    items[5] = {
+		{ .key = 40 }, { .key = 10 }, { .key = 30 },
+		{ .key = 20 }, { .key = 50 },
+	};
+
+	rb_init(&t, item_cmp, item_key_cmp);
+
+	for (int i = 0; i < 5; i++)
+		rb_insert(&t, &items[i].node);
+
+	int         want = 30;
+	rb_node_t  *found = rb_search(&t, &want);
+
+	if (found != NULL)
+		printf("found key %d\n",
+        		RB_CONTAINER(found, item_t, node)->key);
+
+	rb_node_t *n = rb_minimum(t.root);
+
+	printf("in-order: ");
+	while (n != NULL) {
+		printf("%d ", RB_CONTAINER(n, item_t, node)->key);
+		n = rb_successor(n);
+	}
+	printf("\n");
+
+	return 0;
+}
+.Ed
+.Sh SEE ALSO
+.Xr rb_init 3 ,
+.Xr rb_insert 3 ,
+.Xr rb_delete 3 ,
+.Xr rb_search 3 ,
+.Xr rb_minimum 3 ,
+.Xr rb_maximum 3 ,
+.Xr rb_successor 3 ,
+.Xr rb_predecessor 3 ,
+.Xr qsort 3
+.Sh AUTHORS
+.An Gabriel Guillermo Saavedra Moreira

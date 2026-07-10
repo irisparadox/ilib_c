@@ -23,6 +23,10 @@
 #define AL_ERRSTKOF 14 /* STACK OVERFLOW */
 #define AL_ERRSTKUF 15 /* STACK UNDERFLOW */
 
+#define AL_ERRINPTR 64 /* HEAP INVALID PTR */
+#define AL_ERRMGCHK 65 /* HEAP MAGIC CHECK FAIL */
+#define AL_ERRAGAIN 66 /* DOUBLE FREE */
+
 #ifndef NULL
 #define NULL ((void *)0)
 #endif
@@ -74,7 +78,7 @@ void        al_stack_pop(al_stack_t *s);
 void        al_stack_free(al_stack_t *s);
 
 #ifndef ALLOC_F_HEAP
-#define ALLOC_F_HEAP 1
+#define ALLOC_F_HEAP 0
 #endif /* ALLOCAI_F_HEAP */
 
 #if ALLOC_F_HEAP == 1
@@ -531,7 +535,7 @@ static int i_halloc_validate_ptr(ha_allocator_t *h, void *ptr)
 	rb_node_t *reg = rb_search(&h->rbt, ptr);
 	
 	if (reg == NULL) {
-		al_errno = AL_ERRINVAL;
+		al_errno = AL_ERRINPTR;
 		return 0;
 	}
 
@@ -721,8 +725,13 @@ void hfree(ha_allocator_t *h, void *ptr)
 
 	b = (ha_block_t *)ptr - 1;
 
-	if (b->magic != BLOCK_MAGIC || b->free) {
-		al_errno = AL_ERRINVAL;
+	if (b->magic != BLOCK_MAGIC) {
+		al_errno = AL_ERRMGCHK;
+		return;
+	}
+
+	if (b->free) {
+		al_errno = AL_ERRAGAIN;
 		return;
 	}
 
