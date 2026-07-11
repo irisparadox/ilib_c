@@ -1,0 +1,55 @@
+#+TITLE: Disjoint-Sets by Union-Find
+#+AUTHOR: Gabriel Guillermo Saavedra Moreira
+
+* NAME
+
+=dsetuf= - disjoint-set (union-find) module
+
+* LIBRARY
+
+IRIS C Library (=ilib_c=)
+
+* DESCRIPTION
+
+The =dsetuf= module implements a disjoint-set (also called union-find) data structure over =set_size_t= integer elements in the rage =[0, size)=. Each element begins in its own singleton set; sets can be merged with =dset_join()=, and the representative (root) of the set containing an element can be queried with =dset_find()=.
+
+Internally, each set is represented as a tree encoded in the parent array, where ~parent[x] = x~ identifies =x= as a root. Two optimizations keep operations fast:
+
+- *Path compression* :: every call to =dset_find()= rewrites the parent pointers of all nodes visited so they point directly at the root, flattening the tree for future lookups.
+- *Union by size* :: =dset_join()= always attaches the smaller tree's root under the larger tree's root, using the =size= array to track tree sizes, which bounds tree height logarithmically.
+
+Together these give amortized near-constant time per operation.
+
+The =disjoint_set_t= structure is defined as:
+
+#+BEGIN_SRC c
+typedef struct {
+        set_size_t  set_count;
+        set_size_t *size;
+        int        *parent;
+} disjoint_set_t;
+#+END_SRC
+
+=set_size_t= is an alias for unsigned int.
+
+Both =size= and =parent= are dynamically allocated arrays, using the allocator specified by =DSUF_MALLOC=; see [[*IMPLEMENTATION MACROS][IMPLEMENTATION MACROS]].
+
+The following functions make up the module's API:
+
+| Function           | Description                                              |
+|--------------------+----------------------------------------------------------|
+| [[file:dset_construct.org][dset_construct()]]   | initialize a =disjoint_set_t= of a given size              |
+| [[file:dset_destroy.org][dset_destroy()]]     | free all memory owned by a =disjoint_set_t=                |
+| [[file:dset_find.org][dset_find()]]        | return the representative (root) of the set containing =x= |
+| [[file:dset_join.org][dset_join()]]        | merge the sets containing =a= and =b=                        |
+| [[file:dset_joined.org][dset_joined()]]      | return whether =a= and =b= belong to the same set            |
+| [[file:dset_cardinality.org][dset_cardinality()]] | return the number of elements in the set containing =x=    |
+
+** IMPLEMENTATION MACROS
+
+The following preprocessor macros control code generation and are checked at include time:
+
+*DSUF_IMPLEMENTATION*
+        Must be defined in exactly one translation unit before including ~<dsetuf.h>~ to emit function bodies. All other translation units should include the header without defining it, receiving declarations only.
+*DSUF_DECL*
+        Overrides the storage/linkage specifier applied to every function. Defaults to ~static inline~ if left undefined.
