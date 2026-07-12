@@ -91,6 +91,14 @@ void        al_stack_free(al_stack_t *s);
 #define AL_MIN_BLOCK_SIZE 2 * ALLOC_ALIGNMENT
 #endif /* AL_STACK_MAX_MARKS */
 
+#ifndef AL_SHEAP_CHUNK_SIZE
+#define AL_SHEAP_CHUNK_SIZE (32 * 1024)
+#endif /* AL_SHEAP_CHUNK_SIZE */
+
+#ifndef AL_SHEAP_THRESHOLD
+#define AL_SHEAP_THRESHOLD 512
+#endif /* AL_SHEAP_THRESHOLD */
+
 #include "rbtree.h"
 
 typedef struct ha_region ha_region_t;
@@ -115,7 +123,13 @@ struct ha_block {
 };
 
 typedef struct {
+	void      *freep;
+	al_size_t  chunk_size;
+} ha_cacheh_t;
+
+typedef struct {
 	ha_region_t *regions;
+	ha_cacheh_t  sheap[AL_SHEAP_CHUNK_SIZE];
 	rb_tree_t    rbt;
 } ha_allocator_t;
 
