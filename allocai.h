@@ -78,7 +78,7 @@ void        al_stack_pop(al_stack_t *s);
 void        al_stack_free(al_stack_t *s);
 
 #ifndef ALLOC_F_HEAP
-#define ALLOC_F_HEAP 0
+#define ALLOC_F_HEAP 1
 #endif /* ALLOCAI_F_HEAP */
 
 #if ALLOC_F_HEAP == 1
@@ -95,9 +95,7 @@ void        al_stack_free(al_stack_t *s);
 #define AL_SHEAP_CHUNK_SIZE (32 * 1024)
 #endif /* AL_SHEAP_CHUNK_SIZE */
 
-#ifndef AL_SHEAP_THRESHOLD
-#define AL_SHEAP_THRESHOLD 512
-#endif /* AL_SHEAP_THRESHOLD */
+#define AL_SHEAP_NCLASS 5
 
 #include "rbtree.h"
 
@@ -125,11 +123,18 @@ struct ha_block {
 typedef struct {
 	void      *freep;
 	al_size_t  chunk_size;
+} ha_cacheh_class_t;
+
+typedef struct {
+	al_byte_t         cacheh[AL_SHEAP_CHUNK_SIZE];
+	al_byte_t         cacheh_map[AL_SHEAP_CHUNK_SIZE / 16];
+	ha_cacheh_class_t classes[AL_SHEAP_NCLASS];
+	al_size_t         bumptr;
 } ha_cacheh_t;
 
 typedef struct {
 	ha_region_t *regions;
-	ha_cacheh_t  sheap[AL_SHEAP_CHUNK_SIZE];
+	ha_cacheh_t  rcacheh;
 	rb_tree_t    rbt;
 } ha_allocator_t;
 
@@ -399,8 +404,9 @@ void al_stack_free(al_stack_t *s)
 #endif /* I_ALLOCAI_IMPLEMENTATION */
 #endif /* ALLOCAI_IMPLEMENTATION */
 
-//#define ALLOCAI_HEAP_IMPLEMENTATION
+#define ALLOCAI_HEAP_IMPLEMENTATION
 #ifdef ALLOCAI_HEAP_IMPLEMENTATION
+#if ALLOC_F_HEAP == 1
 #ifndef I_ALLOCAI_HEAP_IMPL
 #define I_ALLOCAI_HEAP_IMPL
 
@@ -428,6 +434,11 @@ void al_stack_free(al_stack_t *s)
 #include "rbtree.h"
 
 #define BLOCK_MAGIC 0x4D4A4D4A /* MJMJ */
+#define I_SHEAP_INUSE_BIT 0x80
+
+#define I_AL_PTR_OBOUND 0
+#define I_AL_PTR_MMAP   1
+#define I_AL_PTR_SHEAP  2
 
 /* compile-time check: header sizes must be multiples of ALLOC_ALIGNMENT,
  * or every user pointer handed out will silently be misaligned */
@@ -437,6 +448,30 @@ typedef char i_halloc_check_region_align[
 typedef char i_halloc_check_block_align[
 	(sizeof(ha_block_t) % ALLOC_ALIGNMENT == 0) ? 1 : -1
 ];
+
+static int i_sheap_class_for_size(al_size_t size)
+{
+	if (size <= 16)
+		return 0;
+	if (size <= 32)
+		return 1;
+	if (size <= 64)
+		return 2;
+	if (size <= 128)
+		return 3;
+	if (size <= 512)
+		return 4;
+	return -1;
+}
+
+static int i_sheap_class_of(ha_allocator_t *h, void *ptr)
+{
+	al_size_t off, slot;
+
+	off  = (ilib_uintptr_t)ptr - (ilib_uintptr_t)h->rcacheh.cacheh;
+	slot = off / 16;
+	return (h->rcacheh.cacheh_map[slot]);
+}
 
 int region_cmp(const rb_node_t *a, const rb_node_t *b)
 {
@@ -457,9 +492,14 @@ int region_key_cmp(const void *key, const rb_node_t *node)
 	return (addr >= end) - (addr < begin);
 }
 
+static al_size_t i_halloc_align_up_to(al_size_t n, al_size_t align)
+{
+	return (n + (align - 1)) & ~(align - 1);
+}
+
 static al_size_t i_halloc_align_up(al_size_t n)
 {
-	return (n + (ALLOC_ALIGNMENT - 1)) & ~(ALLOC_ALIGNMENT - 1);
+	return i_halloc_align_up_to(n, ALLOC_ALIGNMENT);
 }
 
 static void *i_halloc_take(ha_block_t *b, al_size_t size)
@@ -544,16 +584,187 @@ static int i_halloc_grow(ha_allocator_t *h, al_size_t size)
 	return 1;
 }
 
+static void *i_halloc_region(ha_allocator_t *h, al_size_t size)
+{
+	void *ptr;
+
+	ptr = i_halloc_try(h, size);
+	if (ptr != NULL) return ptr;
+
+	if (!i_halloc_grow(h, size)) return NULL;
+
+	return i_halloc_take(h->regions->first, size);
+}
+
 static int i_halloc_validate_ptr(ha_allocator_t *h, void *ptr)
 {
-	rb_node_t *reg = rb_search(&h->rbt, ptr);
-	
-	if (reg == NULL) {
-		al_errno = AL_ERRINPTR;
-		return 0;
+	ilib_uintptr_t off;
+	rb_node_t *reg;
+
+	off = (ilib_uintptr_t)ptr - (ilib_uintptr_t)h->rcacheh.cacheh;
+
+	if (off < AL_SHEAP_CHUNK_SIZE) {
+		al_size_t slot, chunk_size;
+		int class_idx;
+
+		slot = off / 16;
+		class_idx = h->rcacheh.cacheh_map[slot] & ~I_SHEAP_INUSE_BIT;
+		chunk_size = h->rcacheh.classes[class_idx].chunk_size;
+
+		if (off % chunk_size != 0) {
+			al_errno = AL_ERRMGCHK;
+			return I_AL_PTR_OBOUND;
+		}
+
+		return I_AL_PTR_SHEAP;
 	}
 
-	return 1;
+	reg = rb_search(&h->rbt, ptr);
+	if (reg == NULL) {
+		al_errno = AL_ERRINPTR;
+		return I_AL_PTR_OBOUND;
+	}
+
+	return I_AL_PTR_MMAP;
+}
+
+static void *i_sheap_alloc(ha_allocator_t *h, al_size_t size)
+{
+	int class_idx;
+	void      *ptr;
+	al_size_t  chunk_size;
+	al_size_t  off, slot;
+
+	class_idx = i_sheap_class_for_size(size);
+	if (class_idx < 0) return NULL;
+
+	if (h->rcacheh.classes[class_idx].freep != NULL) {
+		ptr = h->rcacheh.classes[class_idx].freep;
+		h->rcacheh.classes[class_idx].freep = *(void **)ptr;
+
+		slot = ((al_byte_t *)ptr - h->rcacheh.cacheh) / 16;
+		h->rcacheh.cacheh_map[slot] |= I_SHEAP_INUSE_BIT;
+
+		al_errno = AL_OK;
+		return ptr;
+	}
+
+	chunk_size = h->rcacheh.classes[class_idx].chunk_size;
+	h->rcacheh.bumptr = i_halloc_align_up_to(h->rcacheh.bumptr, chunk_size);
+
+	if (h->rcacheh.bumptr + chunk_size > AL_SHEAP_CHUNK_SIZE)
+		return NULL;
+
+	off = h->rcacheh.bumptr;
+	ptr = h->rcacheh.cacheh + off;
+	h->rcacheh.bumptr += chunk_size;
+
+	slot = off / 16;
+	h->rcacheh.cacheh_map[slot] = (al_byte_t)class_idx | I_SHEAP_INUSE_BIT;
+
+	al_errno = AL_OK;
+	return ptr;
+}
+
+static void i_sheap_free(ha_allocator_t *h, void *ptr)
+{
+	al_size_t	off, slot;
+	int		class_idx;
+
+	off  = (al_byte_t *)ptr - h->rcacheh.cacheh;
+	slot = off / 16;
+
+	if (!(h->rcacheh.cacheh_map[slot] & I_SHEAP_INUSE_BIT)) {
+		al_errno = AL_ERRAGAIN;
+		return;
+	}
+
+	class_idx = h->rcacheh.cacheh_map[slot] & ~I_SHEAP_INUSE_BIT;
+	h->rcacheh.cacheh_map[slot] = (al_byte_t)class_idx;
+
+	*(void **)ptr = h->rcacheh.classes[class_idx].freep;
+	h->rcacheh.classes[class_idx].freep = ptr;
+	al_errno = AL_OK;
+}
+
+static void *i_sheap_realloc(ha_allocator_t *h, void *ptr, al_size_t size)
+{
+	int        old_class, new_class;
+	void      *new_ptr;
+	al_size_t  old_chunk_size;
+
+	old_class = i_sheap_class_of(h, ptr);
+	new_class = i_sheap_class_for_size(size);
+
+	if (new_class >= 0 && new_class <= old_class) {
+		al_errno = AL_OK;
+		return ptr;
+	}
+
+	if (new_class > old_class) {
+		old_chunk_size = h->rcacheh.classes[old_class].chunk_size;
+		new_ptr = i_sheap_alloc(h, size);
+
+		if (new_ptr == NULL) {
+			al_errno = AL_ERRBCKFL;
+			return NULL;
+		}
+
+		al_memcpy(new_ptr, ptr, old_chunk_size);
+		i_sheap_free(h, ptr);
+		return new_ptr;
+	}
+
+	old_chunk_size = h->rcacheh.classes[old_class].chunk_size;
+
+	new_ptr = i_halloc_region(h, size);
+	if (new_ptr == NULL) return NULL;
+
+	al_memcpy(new_ptr, ptr, old_chunk_size);
+	i_sheap_free(h, ptr);
+
+	al_errno = AL_OK;
+	return new_ptr;
+}
+
+static void *i_mmap_realloc(ha_allocator_t *h, void *ptr, al_size_t size)
+{
+	ha_block_t *b;
+	void       *new_ptr;
+	al_size_t   copy_size;
+
+	b = (ha_block_t *)ptr - 1;
+
+	if (b->size >= size) {
+		al_errno = AL_OK;
+		return ptr;
+	}
+
+	if (b->next != NULL && b->next->free &&
+	    b->size + sizeof(ha_block_t) + b->next->size >= size) {
+		ha_block_t *r = b->next;
+
+		b->size += sizeof(ha_block_t) + r->size;
+		b->next  = r->next;
+		if (r->next != NULL) {
+			r->next->prev = b;
+		}
+
+		return i_halloc_take(b, size);
+	}
+
+	new_ptr = halloc(h, size);
+	if (new_ptr == NULL) {
+		return NULL;
+	}
+
+	copy_size = b->size;
+	al_memcpy(new_ptr, ptr, copy_size);
+	hfree(h, ptr);
+
+	al_errno = AL_OK;
+	return new_ptr;
+
 }
 
 ha_allocator_t halloc_init(al_size_t size)
@@ -567,6 +778,15 @@ ha_allocator_t halloc_init(al_size_t size)
 		h.regions = NULL;
 		return h;
 	}
+
+	static const al_size_t al_sheap_sizes[AL_SHEAP_NCLASS] = { 16, 32, 64, 128, 512 };
+
+	al_size_t i;
+	for (i = 0; i < AL_SHEAP_NCLASS; ++i) {
+		h.rcacheh.classes[i].freep = NULL;
+		h.rcacheh.classes[i].chunk_size = al_sheap_sizes[i];
+	}
+	h.rcacheh.bumptr = 0;
 
 	// metadata lives at the start of mmap block
 	void *mem = ALLOCAI_MMAP(size);
@@ -631,16 +851,10 @@ void *halloc(ha_allocator_t *h, al_size_t size)
 
 	size = i_halloc_align_up(size);
 
-	found = i_halloc_try(h, size);
-	if (found != NULL) {
+	if ((found = i_sheap_alloc(h, size)) != NULL)
 		return found;
-	}
 
-	if (!i_halloc_grow(h, size)) {
-		return NULL;
-	}
-
-	return i_halloc_take(h->regions->first, size);
+	return i_halloc_region(h, size);
 }
 
 void *hcalloc(ha_allocator_t *h, al_size_t nmemb, al_size_t size)
@@ -666,10 +880,6 @@ void *hcalloc(ha_allocator_t *h, al_size_t nmemb, al_size_t size)
 
 void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size)
 {
-	ha_block_t *b;
-	void       *new_ptr;
-	al_size_t   copy_size;
-
 	if (h == NULL) {
 		al_errno = AL_ERRINVAL;
 		return NULL;
@@ -684,41 +894,16 @@ void *hrealloc(ha_allocator_t *h, void *ptr, al_size_t size)
 		return NULL;
 	}
 
-	if (!i_halloc_validate_ptr(h, ptr)) return NULL;
-
+	int type = i_halloc_validate_ptr(h, ptr);
 	size = i_halloc_align_up(size);
 
-	b = (ha_block_t *)ptr - 1;
-
-	if (b->size >= size) {
-		al_errno = AL_OK;
-		return ptr;
+	switch (type) {
+	case I_AL_PTR_OBOUND: return NULL;
+	case I_AL_PTR_MMAP: return i_mmap_realloc(h, ptr, size);
+	case I_AL_PTR_SHEAP: return i_sheap_realloc(h, ptr, size);
 	}
 
-	if (b->next != NULL && b->next->free &&
-	    b->size + sizeof(ha_block_t) + b->next->size >= size) {
-		ha_block_t *r = b->next;
-
-		b->size += sizeof(ha_block_t) + r->size;
-		b->next  = r->next;
-		if (r->next != NULL) {
-			r->next->prev = b;
-		}
-
-		return i_halloc_take(b, size);
-	}
-
-	new_ptr = halloc(h, size);
-	if (new_ptr == NULL) {
-		return NULL;
-	}
-
-	copy_size = b->size;
-	al_memcpy(new_ptr, ptr, copy_size);
-	hfree(h, ptr);
-
-	al_errno = AL_OK;
-	return new_ptr;
+	return NULL;
 }
 
 void hfree(ha_allocator_t *h, void *ptr)
@@ -735,7 +920,12 @@ void hfree(ha_allocator_t *h, void *ptr)
 		return;
 	}
 
-	if (!i_halloc_validate_ptr(h, ptr)) return;
+	int ret = i_halloc_validate_ptr(h, ptr);
+	if (ret == I_AL_PTR_OBOUND) return;
+	if (ret == I_AL_PTR_SHEAP) {
+		i_sheap_free(h, ptr);
+		return;
+	}
 
 	b = (ha_block_t *)ptr - 1;
 
@@ -778,8 +968,9 @@ void hfree(ha_allocator_t *h, void *ptr)
 	al_errno = AL_OK;
 }
 
-#endif /* ALLOCAI_HEAP_IMPLEMENTATION */
 #endif /* I_ALLOCAI_HEAP_IMPL */
+#endif /* ALLOC_F_HEAP == 1 */
+#endif /* ALLOCAI_HEAP_IMPLEMENTATION */
 
 /*
  * MIT License

@@ -941,7 +941,7 @@ void test_hallocator(void)
 
 	/* --- free: corrupted magic reports AL_ERRMGCHK --- */
 	{
-		void      *p4 = halloc(&h, 32);
+		void      *p4 = halloc(&h, 1024);
 		ha_block_t *b4;
 
 		assert(p4 != NULL);
