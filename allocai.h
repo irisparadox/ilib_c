@@ -78,7 +78,7 @@ void        al_stack_pop(al_stack_t *s);
 void        al_stack_free(al_stack_t *s);
 
 #ifndef ALLOC_F_HEAP
-#define ALLOC_F_HEAP 1
+#define ALLOC_F_HEAP 0
 #endif /* ALLOCAI_F_HEAP */
 
 #if ALLOC_F_HEAP == 1
@@ -404,7 +404,7 @@ void al_stack_free(al_stack_t *s)
 #endif /* I_ALLOCAI_IMPLEMENTATION */
 #endif /* ALLOCAI_IMPLEMENTATION */
 
-#define ALLOCAI_HEAP_IMPLEMENTATION
+//#define ALLOCAI_HEAP_IMPLEMENTATION
 #ifdef ALLOCAI_HEAP_IMPLEMENTATION
 #if ALLOC_F_HEAP == 1
 #ifndef I_ALLOCAI_HEAP_IMPL
