@@ -6,6 +6,7 @@
 #endif  /* _POSIX_C_SOURCE */
 
 #include <unistd.h>
+#include <pthread.h>
 
 #if !defined(_POSIX_VERSION) || _POSIX_VERSION < 200809L
 #error "idsched.h needs a POSIX-compliant (POSIX.1-2008) system (pthreads, unistd.h)"
@@ -13,6 +14,7 @@
 
 #include "deftypei.h"
 #include "rbtree.h"
+#include "queue.h"
 
 #ifndef IDSCHED_EMA_ALPHA
 #define IDSCHED_EMA_ALPHA 0.2
@@ -55,12 +57,29 @@ typedef struct idsched_task {
 	int cp_computed;
 } idsched_task_t;
 
+typedef struct idsched_core {
+	pqueue_t        ready;
+
+	pthread_t       thread;
+	pthread_mutex_t lock;
+
+	int             active;
+} idsched_core_t;
+
 typedef struct idsched {
-	rb_tree_t rbpd;
+	idsched_core_t *cores;
+	ilib_size_t     cores_cap;
+
+	rb_tree_t       rbpd;
+	pthread_mutex_t rbpdlock;
 } idsched_t;
 
-idsched_t      *idsched_create(void);
+idsched_t      *idsched_create(ilib_size_t max_cores);
 void            idsched_destroy(idsched_t *sched);
+
+int             idsched_add_core(idsched_t *sched);
+int             idsched_remove_core(idsched_t *sched, ilib_size_t core_id);
+
 idsched_task_t *idsched_task_create(idsched_t* sched, void (*fn)(void *arg), void *arg);
 void            idsched_task_destroy(idsched_task_t *t);
 void            idsched_task_destroy_all(idsched_task_t **tasks, ilib_size_t n_tasks);
@@ -72,7 +91,7 @@ void            idsched_run_all(idsched_t *sched, idsched_task_t **tasks, ilib_s
 
 #endif /* IDSCHED_H_ */
 
-//#define IDSCHED_IMPLEMENTATION
+#define IDSCHED_IMPLEMENTATION
 #ifdef IDSCHED_IMPLEMENTATION
 
 #include <stdlib.h>
@@ -82,9 +101,24 @@ void            idsched_run_all(idsched_t *sched, idsched_task_t **tasks, ilib_s
 #define RBTREE_IMPLEMENTATION
 #endif  /* RBTREE_IMPLEMENTATION */
 
+#ifndef PQUEUE_IMPLEMENTATION
+#define PQUEUE_IMPLEMENTATION
+#endif  /* PQUEUE_IMPLEMENTATION */
+
 #include "rbtree.h"
+#include "queue.h"
 
 #define I_ONEMALPHA (1 - IDSCHED_EMA_ALPHA)
+
+static int i_core_cmp(const void *a, const void *b)
+{
+	idsched_task_t *ta, *tb;
+
+	ta = *(idsched_task_t * const *)a;
+	tb = *(idsched_task_t * const *)b;
+
+	return (tb->cp > ta->cp) - (tb->cp < ta->cp);
+}
 
 static int i_pred_cmp(const rb_node_t *a, const rb_node_t *b)
 {
@@ -115,31 +149,15 @@ static int i_pred_kcmp(const void *key, const rb_node_t *n)
 	return (pk > ps) - (pk < ps);
 }
 
-idsched_t *idsched_create(void)
+static void i_mark_dirty(idsched_task_t *t)
 {
-	idsched_t *sched;
+	ilib_size_t i;
 
-	sched = malloc(sizeof(idsched_t));
-	if (!sched) return NULL;
+	if (!t->cp_computed) return;
 
-	rb_init(&sched->rbpd, i_pred_cmp, i_pred_kcmp);
-
-	return sched;
-}
-
-void idsched_destroy(idsched_t *sched)
-{
-	rb_node_t *n;
-	idsched_predictor_t *st;
-
-	while (!rb_empty(&sched->rbpd)) {
-		n  = rb_minimum(sched->rbpd.root);
-		st = RB_CONTAINER(n, idsched_predictor_t, node);
-		rb_delete(&sched->rbpd, n);
-		free(st);
-	}
-
-	free(sched);
+	t->cp_computed = 0;
+	for (i = 0; i < t->pred_len; ++i)
+		i_mark_dirty(t->pred[i]);
 }
 
 static int i_arr_grow(idsched_task_t ***arr, ilib_size_t *len, ilib_size_t *cap)
@@ -207,6 +225,125 @@ static void i_predictor_update(idsched_t *sched, void (*fn)(void *arg), double a
 	st->n_samples++;
 }
 
+static void i_core_migrate_all(idsched_t *sched, ilib_size_t fromidx, ilib_size_t toidx)
+{
+	idsched_core_t *from, *to;
+	idsched_task_t *t;
+
+	from = &sched->cores[fromidx];
+	to   = &sched->cores[toidx];
+
+	if (fromidx < toidx) {
+		pthread_mutex_lock(&from->lock);
+		pthread_mutex_lock(&to->lock);
+	} else {
+		pthread_mutex_lock(&to->lock);
+		pthread_mutex_lock(&from->lock);
+	}
+
+	while (!pqueue_empty(&from->ready)) {
+		t = pqueue_top(&from->ready, idsched_task_t *);
+		pqueue_pop(&from->ready);
+		pqueue_push(&to->ready, &t);
+	}
+
+	pthread_mutex_unlock(&from->lock);
+	pthread_mutex_unlock(&to->lock);
+}
+
+idsched_t *idsched_create(ilib_size_t max_cores)
+{
+	idsched_t   *sched;
+	ilib_size_t  i;
+
+	sched = malloc(sizeof(idsched_t));
+	if (!sched) return NULL;
+
+	sched->cores = calloc(max_cores, sizeof(idsched_core_t));
+	if (!sched->cores) {
+		free(sched);
+		return NULL;
+	}
+	sched->cores_cap = max_cores;
+
+	for (i = 0; i < max_cores; ++i) {
+		sched->cores[i].active = 0;
+	}
+
+	rb_init(&sched->rbpd, i_pred_cmp, i_pred_kcmp);
+	pthread_mutex_init(&sched->rbpdlock, NULL);
+
+	return sched;
+}
+
+void idsched_destroy(idsched_t *sched)
+{
+	rb_node_t           *n;
+	idsched_predictor_t *st;
+
+	/* TODO active cores should be shutdown first */
+
+	while (!rb_empty(&sched->rbpd)) {
+		n  = rb_minimum(sched->rbpd.root);
+		st = RB_CONTAINER(n, idsched_predictor_t, node);
+		rb_delete(&sched->rbpd, n);
+		free(st);
+	}
+
+	pthread_mutex_destroy(&sched->rbpdlock);
+	free(sched->cores);
+	free(sched);
+}
+
+
+int idsched_add_core(idsched_t *sched)
+{
+	ilib_size_t i;
+
+	for (i = 0; i < sched->cores_cap; ++i) {
+		if (sched->cores[i].active) continue;
+
+		if (pqueue_construct(&sched->cores[i].ready, sizeof(idsched_task_t *), i_core_cmp) != 0)
+			return -1;
+
+		pthread_mutex_init(&sched->cores[i].lock, NULL);
+		sched->cores[i].active = 1;
+
+		return (int)i;
+	}
+
+	return -1;
+}
+
+int idsched_remove_core(idsched_t *sched, ilib_size_t core_id)
+{
+	ilib_size_t i;
+	int         dest;
+
+	if (core_id >= sched->cores_cap || !sched->cores[core_id].active)
+		return -1;
+
+	if (!pqueue_empty(&sched->cores[core_id].ready)) {
+		dest = -1;
+		for (i = 0; i < sched->cores_cap; ++i) {
+			if (i != core_id && sched->cores[i].active) {
+				dest = (int)i;
+				break;
+			}
+		}
+
+		if (dest < 0) return -1;
+
+		i_core_migrate_all(sched, core_id, (ilib_size_t)dest);
+	}
+
+	pqueue_destroy(&sched->cores[core_id].ready);
+	pthread_mutex_destroy(&sched->cores[core_id].lock);
+	sched->cores[core_id].active = 0;
+
+	return 0;
+}
+
 idsched_task_t *idsched_task_create(idsched_t *sched, void (*fn)(void *), void *arg)
 {
 	idsched_task_t      *t;
@@ -256,8 +393,6 @@ void idsched_task_destroy_all(idsched_task_t **tasks, ilib_size_t n_tasks)
 
 int idsched_add_dep(idsched_task_t *t, idsched_task_t *depends_on)
 {
-	/* TODO rollback on failures */
-
 	if (!i_arr_grow(&depends_on->succ, &depends_on->succ_len, &depends_on->succ_cap))
 		return 0;
 
@@ -274,14 +409,17 @@ int idsched_add_dep(idsched_task_t *t, idsched_task_t *depends_on)
 
 idsched_task_t *idsched_pick_next(idsched_task_t **tasks, ilib_size_t n_tasks)
 {
-	ilib_size_t i;
+	ilib_size_t     i;
 	idsched_task_t *t, *best;
+	double          c;
 
 	best = NULL;
 	for (i = 0; i < n_tasks; ++i) {
 		t = tasks[i];
 		if (t->state != IDSCHED_READY) continue;
-		if (!best || t->cp > best->cp)
+
+		c = i_compute_cp(t);
+		if (!best || c > best->cp)
 			best = t;
 	}
 
@@ -297,6 +435,10 @@ void idsched_report_done(idsched_t *sched, idsched_task_t *t, double elapsed)
 	idsched_task_t *s;
 
 	i_predictor_update(sched, t->fn, elapsed);
+
+	t->duration = elapsed;
+	i_mark_dirty(t);
+
 	t->state = IDSCHED_DONE;
 
 	for (i = 0; i < t->succ_len; ++i) {
@@ -309,14 +451,9 @@ void idsched_report_done(idsched_t *sched, idsched_task_t *t, double elapsed)
 
 void idsched_run_all(idsched_t *sched, idsched_task_t **tasks, ilib_size_t n_tasks)
 {
-	ilib_size_t i;
 	idsched_task_t *t;
 	struct timespec t0, t1;
 	double elapsed;
-
-	for (i = 0; i < n_tasks; ++i) {
-		i_compute_cp(tasks[i]);
-	}
 
 	for (;;) {
 		t = idsched_pick_next(tasks, n_tasks);
