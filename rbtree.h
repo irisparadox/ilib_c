@@ -104,6 +104,7 @@ RBTREE_DECL void rb_insert(rb_tree_t *t, rb_node_t *node);
 RBTREE_DECL void rb_delete(rb_tree_t *t, rb_node_t *node);
 
 RBTREE_DECL rb_node_t *rb_search(const rb_tree_t *t, const void *key);
+RBTREE_DECL int        rb_empty(const rb_tree_t *t);
 RBTREE_DECL rb_node_t *rb_minimum(rb_node_t *t);
 RBTREE_DECL rb_node_t *rb_maximum(rb_node_t *t);
 RBTREE_DECL rb_node_t *rb_successor(rb_node_t *t);
@@ -376,6 +377,11 @@ RBTREE_DECL rb_node_t *rb_search(const rb_tree_t *t, const void *key)
 	}
 
 	return curr == &rb_nil ? NULL : curr;
+}
+
+RBTREE_DECL int rb_empty(const rb_tree_t *t)
+{
+	return t->root == &rb_nil;
 }
 
 RBTREE_DECL rb_node_t *rb_minimum(rb_node_t *t)
