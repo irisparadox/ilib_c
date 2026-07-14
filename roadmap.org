@@ -1,0 +1,205 @@
+#+title: Roadmap
+
+* SCHEDULER
+
+*** ABSTRACT
+
+**** Scheduler Design Goals
+
+I want each worker thread managed by the scheduler to represent a CPU core. Each core has its own unique ID, its own run queue, and can be brought online or shut down independently. Every core executes an infinite scheduling loop, continuously selecting and executing tasks. A task may either complete normally or run indefinitely, mirroring how a real operating system schedules threads.
+
+Tasks should be prioritized, although the exact scheduling policy is still to be determined. Since the user cannot accurately predict a task's execution time beforehand, the scheduler should include a runtime predictor. Whenever a task completes, its measured execution time should be fed back into the predictor so that future instances of the same task can be scheduled more intelligently.
+
+An infinitely running task is currently considered valid behavior. Such a task simply occupies its assigned core until it finishes (if ever). This limitation is accepted in the initial design.
+
+*Future work (not part of the initial implementation):* introduce cooperative multitasking through a =task_yield()= primitive. A task that contains a loop which may never terminate would be expected to periodically call =task_yield()=. This function would save the task's execution context, place the task back into the run queue, and allow the scheduler to execute other tasks before later resuming it. Whether this feature is implemented, and how the execution context is represented, is intentionally left for a future revision.
+
+Tasks may also create sub-tasks, similarly to a process performing a =fork()=. This will likely be exposed through an API such as =task_fork()= and =task_exec()=, although the exact interface remains to be designed.
+
+Tasks should be migratable between cores. If a core is shut down, all runnable tasks assigned to it must be migrated to another online core before the worker thread exits. Additionally, cores should eventually be able to balance load automatically: an underutilized core may request work from other cores, while an overloaded core may choose to migrate tasks to reduce its workload. The precise migration policy is still an open design question.
+
+The scheduler distinguishes between the bootstrap core and worker cores. The bootstrap core executes on the thread that creates the scheduler, while all remaining cores execute on dedicated worker threads. The scheduler topology is fixed when the scheduler is created; adding or removing cores at runtime (CPU hot-plugging) is intentionally out of scope for the initial implementation.
+
+*** ROADMAP
+**** Phase 0 - Core Architecture
+
+=Goal:= Build the scheduler skeleton.
+
+- *Components* ::
+  * =idsched_t=
+  * =idsched_core_t=
+  * =idsched_task_t=
+  * Core run queue
+  * Scheduler creation/destruction
+  * Bootstrap core (Core 0)
+  * Worker cores
+
+- *Invariants* ::
+  * Number of cores is fixed at creation.
+  * Core 0 runs on the creator thread.
+  * Every other core owns one pthread.
+  * Every core has exactly one run queue.
+  * Every task belongs to exactly one scheduler.
+
+**** Phase 1 - Basic Task Execution
+
+=Goal:= Execute tasks concurrently
+
+- *Features* ::
+  * Task creation
+  * Submit task
+  * =READY= / =RUNNING= / =DONE= states
+  * Worker loop
+  * Graceful scheduler shutdown
+
+- *Invariants* ::
+  * Every =READY= task is inside exactly one run queue.
+  * Every =RUNNING= task belongs to exactly one core.
+  * A task instance executes at most once.
+  * No migration.
+  * No priorities.
+
+The phase ends when multiple cores can execute independent tasks correctly.
+
+**** Phase 2 - Priority Scheduling
+
+=Goal:= Replace FIFO scheduling.
+
+- *Features* ::
+  * Priority queue
+  * Runtime predictor
+  * EMA execution predictor
+  * Priority comparator
+
+- *Invariants* ::
+  * Priority is computed when a task becomes =READY=.
+  * Predictor updates only affect future tasks instances.
+  * Existing =READY= task instances never change priority.
+
+This makes it not a dynamic scheduler.
+
+**** Phase 3 - Dynamic Task Graph
+
+=Goal:= Tasks create more tasks.
+
+- *Features* ::
+  * Parent/child relationship
+  * ~task_fork()~
+  * ~task_exec()~
+  * Dependency tracking
+  * Automatic wake-up when dependencies finish
+
+- *Invariants* ::
+  * Children belong to the same scheduler.
+  * Child starts as =BLOCKED= or =READY= depending on dependencies.
+  * Parent continues executing after spawning.
+  * No context switching.
+
+**** Phase 4 - Core Management
+
+=Goal:= Treat cores like CPUs.
+
+- *Features* ::
+  * Core shutdown
+  * Core startup
+  * Core states
+  * Bootstrap core management
+
+- *Invariants* ::
+  * Shutting down a core never loses tasks.
+  * The currently running task is allowed to finish before the core shuts down.
+  * =READY= tasks are migrated before the worker thread exits.
+  * No hot-plugging.
+
+**** Phase 5 - Task Migration
+
+=Goal:= Move work between cores.
+
+- *Features* ::
+  * Manual migration
+  * Automatic migration
+  * Load requests
+  * Load donation
+
+- *Policy (initial)* ::
+  * Only =READY= task instances may migrate.
+
+- *Future policies* ::
+  * Work stealing
+  * Load balancing
+  * Migration heuristics
+
+**** Phase 6 - Scheduling Policies
+
+=Goal:= Improve scheduling decisions.
+
+- *Possible additions* ::
+  * Critical-path scheduling
+  * Dependency-aware scheduling
+  * Predictor improvements
+  * Aging
+  * Fair scheduling
+
+No implementation decided yet.
+
+**** Phase 7 - Cooperative Multitasking
+
+=Goal:= Allow infinite tasks without monopolizing a core.
+
+- *Features* ::
+  * ~task_yield()~
+  * User-space context
+  * Context Switching
+  * Resume execution
+
+- *Invariants* ::
+  * Yield is cooperative.
+  * Scheduler never preempts arbitrary code.
+  * Context representation is implementation-defined.
+
+**** Phase 8 - Future Research
+
+*COMPLETELY OPTIONAL*
+
+- *Examples* ::
+  * Timer-based preemption.
+  * Custom assembly context switching.
+  * *NUMA* awareness.
+  * CPU affinity.
+  * Heterogeneous scheduling
+  * Hot-plugging
+  * Multiple schedulers communicating.
+
+*** RULES
+
+These are frozen unless there is a correctness issue.
+1. Every phase must compile before the next begins.
+2. Never implement a feature belonging to a later phase.
+3. No optimization before correctness within a phase.
+4. Each phase has clear invariants that must never be violated.
+5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
+
+
+** TODO Implementation [0/7]
+*** TODO Phase 0 - Core Architecture [0/6]
+**** TODO Define scheduler data structures [0/3]
+***** TODO Implement =idsched_t=
+***** TODO Implement =idsched_core_t=
+***** TODO Implement =idsched_task_t=
+**** TODO Core run queue [0/1]
+***** TODO Add the run queue with =queue.h=
+**** TODO Scheduler lifecycle [0/2]
+***** TODO Implement ~idsched_create()~
+***** TODO Implement ~idsched_destroy()~
+**** TODO Bootstrap core [0/2]
+***** TODO Initialize Core 0
+***** TODO Associate creator thread
+**** TODO Worker cores [0/3]
+***** TODO Spawn worker threads
+***** TODO Initialize per-core state
+***** TODO Shutdown worker threads cleanly
+**** TODO Verify invariants [0/4]
+***** TODO Fixed number of cores
+***** TODO One queue per core
+***** TODO One pthread per worker core
+***** TODO Every task belongs to one scheduler
