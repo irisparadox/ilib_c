@@ -68,6 +68,8 @@ The phase ends when multiple cores can execute independent tasks correctly.
 - *Features* ::
   * Priority queue
   * Runtime predictor
+  * Global runtime predictor
+  * Per-core local runtime predictors
   * EMA execution predictor
   * Priority comparator
 
@@ -75,8 +77,11 @@ The phase ends when multiple cores can execute independent tasks correctly.
   * Priority is computed when a task becomes =READY=.
   * Predictor updates only affect future tasks instances.
   * Existing =READY= task instances never change priority.
+  * Every completed task updates both the local predictor of the executing core and the scheduler's global predictor.
+  * When predicting a task's runtime, the scheduler prefers the local predictor if sufficient history exists; otherwise it falls back to the global predictor.
 
 This makes it not a dynamic scheduler.
+The exact policy for combining local and global predictions is intentionally left unspecified and may evolve.
 
 **** Phase 3 - Dynamic Task Graph
 
@@ -180,26 +185,27 @@ These are frozen unless there is a correctness issue.
 5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
 
 
-** TODO Implementation [0/7]
-*** TODO Phase 0 - Core Architecture [0/6]
-**** TODO Define scheduler data structures [0/3]
-***** TODO Implement =idsched_t=
-***** TODO Implement =idsched_core_t=
-***** TODO Implement =idsched_task_t=
-**** TODO Core run queue [0/1]
-***** TODO Add the run queue with =queue.h=
-**** TODO Scheduler lifecycle [0/2]
-***** TODO Implement ~idsched_create()~
-***** TODO Implement ~idsched_destroy()~
-**** TODO Bootstrap core [0/2]
-***** TODO Initialize Core 0
-***** TODO Associate creator thread
-**** TODO Worker cores [0/3]
-***** TODO Spawn worker threads
-***** TODO Initialize per-core state
-***** TODO Shutdown worker threads cleanly
-**** TODO Verify invariants [0/4]
-***** TODO Fixed number of cores
-***** TODO One queue per core
-***** TODO One pthread per worker core
-***** TODO Every task belongs to one scheduler
+** DONE Implementation [23/23]
+*** DONE Phase 0 - Core Architecture [22/22]
+**** DONE Define scheduler data structures [4/4]
+***** DONE Implement =idsched_t=
+***** DONE Implement =idsched_core_t=
+***** DONE Implement =idsched_task_t=
+***** DONE Implement idsched_acpi_t
+**** DONE Core run queue [1/1]
+***** DONE Add the run queue with =queue.h=
+**** DONE Scheduler lifecycle [2/2]
+***** DONE Implement ~idsched_create()~
+***** DONE Implement ~idsched_destroy()~
+**** DONE Bootstrap core [2/2]
+***** DONE Initialize Core 0
+***** DONE Associate creator thread
+**** DONE Worker cores [3/3]
+***** DONE Startup worker threads
+***** DONE Initialize per-core state
+***** DONE Shutdown worker threads cleanly
+**** DONE Verify invariants [4/4]
+***** DONE Fixed number of cores
+***** DONE One queue per core
+***** DONE One pthread per worker core
+***** DONE Every task belongs to one scheduler

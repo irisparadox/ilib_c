@@ -1,33 +1,59 @@
 #define IDSCHED_IMPLEMENTATION
 #include "idsched.h"
+
+#include <assert.h>
 #include <stdio.h>
 
-static void task_a(void *arg) { (void)arg; printf("running A\n"); }
-static void task_b(void *arg) { (void)arg; printf("running B\n"); }
-static void task_c(void *arg) { (void)arg; printf("running C\n"); }
+#define NCORES 4
+
+static void test_fixed_ncores(idsched_t *sched)
+{
+	assert(sched->ncores == NCORES);
+	printf("[PASS] fixed number of cores\n");
+}
+
+static void test_one_queue_per_core(idsched_t *sched)
+{
+	ilib_size_t i;
+
+	for (i = 0; i < sched->ncores; ++i)
+		assert(sched->cores[i].rq.cmp == i_task_cmp);
+
+	printf("[PASS] one queue per core\n");
+}
+
+static void test_one_pthread_per_core(idsched_t *sched)
+{
+	ilib_size_t i, j;
+	int         started;
+
+	started = idsched_core_startup(sched, IDSCHED_ALL_CORES);
+	assert(started == (int)(sched->ncores - 1));
+
+	/* every worker core is ONLINE and has a distinct thread id */
+	for (i = 1; i < sched->ncores; ++i) {
+		assert(sched->cores[i].flags & IDSCHED_CORE_ONLINE);
+
+		for (j = i + 1; j < sched->ncores; ++j)
+			assert(!pthread_equal(sched->cores[i].thread, sched->cores[j].thread));
+	}
+
+	printf("[PASS] one pthread per worker core\n");
+}
 
 int main(void)
 {
-	idsched_t       *sched;
-	idsched_task_t  *a, *b, *c;
-	idsched_task_t  *tasks[3];
+	idsched_t sched;
 
-	sched = idsched_create();
+	assert(idsched_create(&sched, NCORES) == 0);
 
-	a = idsched_task_create(sched, task_a, NULL);
-	b = idsched_task_create(sched, task_b, NULL);
-	c = idsched_task_create(sched, task_c, NULL);
+	test_fixed_ncores(&sched);
+	test_one_queue_per_core(&sched);
+	test_one_pthread_per_core(&sched);
 
-	idsched_add_dep(b, a);
+	assert(idsched_core_shutdown(&sched, IDSCHED_ALL_CORES) == (int)(sched.ncores - 1));
+	assert(idsched_destroy(&sched) == 0);
 
-	tasks[0] = c;
-	tasks[1] = a;
-	tasks[2] = b;
-
-	idsched_run_all(sched, tasks, 3);
-
-	idsched_task_destroy_all(tasks, 3);
-	idsched_destroy(sched);
-
+	printf("All Phase 0 tests passed.\n");
 	return 0;
 }
