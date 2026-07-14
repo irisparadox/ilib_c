@@ -109,12 +109,15 @@ The exact policy for combining local and global predictions is intentionally lef
   * Core startup
   * Core states
   * Bootstrap core management
+  * ACPI Watcher Thread
+  * Signal combination to bootstrap shutdown.
 
 - *Invariants* ::
   * Shutting down a core never loses tasks.
   * The currently running task is allowed to finish before the core shuts down.
   * =READY= tasks are migrated before the worker thread exits.
   * No hot-plugging.
+  * Core 0 can only be shutdown via signaling the ACPI.
 
 **** Phase 5 - Task Migration
 
