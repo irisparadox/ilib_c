@@ -188,7 +188,7 @@ These are frozen unless there is a correctness issue.
 5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
 
 
-** DONE Implementation [23/23]
+** DONE Implementation [44/44]
 *** DONE Phase 0 - Core Architecture [22/22]
 **** DONE Define scheduler data structures [4/4]
 ***** DONE Implement =idsched_t=
@@ -212,3 +212,24 @@ These are frozen unless there is a correctness issue.
 ***** DONE One queue per core
 ***** DONE One pthread per worker core
 ***** DONE Every task belongs to one scheduler
+*** DONE Phase 1 - Basic Task Execution [20/20]
+**** DONE Task API [2/2]
+***** DONE Implement ~idsched_task_create()~
+***** DONE Implement ~idsched_task_submit()~
+**** DONE Worker execution loop [4/4]
+***** DONE Wait for work
+***** DONE Execute =READY= tasks
+***** DONE Transition =READY= -> =RUNNING=
+***** DONE Transition =RUNNING= -> =DONE=
+**** DONE Graceful shutdown [1/1]
+***** DONE Stop accepting work
+**** DONE Test concurrent execution [2/2]
+***** DONE Single core
+***** DONE Multiple cores
+**** DONE Verify Invariants [6/6]
+***** DONE Every =READY= task is inside exactly one run queue.
+***** DONE Every =RUNNING= task belongs to exactly one core.
+***** DONE A task instances executes at most once.
+***** DONE No migration.
+***** DONE No priorities.
+***** DONE Tasks are assigned in sequential order to online cores.

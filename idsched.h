@@ -33,15 +33,23 @@
 
 #define IDSCHED_ALL_CORES     ((ilib_size_t)-1)
 
+#define IDSCHED_WIFEXITED(status)   ((status) >= 0)
+#define IDSCHED_WEXITSTATUS(status) (status)
+#define IDSCHED_INVALID_TID ((ilib_uint64_t)-1)
+
 typedef struct idsched      idsched_t;
 typedef struct idsched_acpi idsched_acpi_t;
 typedef struct idsched_core idsched_core_t;
 typedef struct idsched_task idsched_task_t;
 
+typedef ilib_uint64_t idsched_tid;
+
 struct idsched {
 	ilib_size_t     ncores;
 	ilib_uint64_t   nseq;
 	idsched_core_t *cores;
+
+	pthread_mutex_t lck;
 };
 
 struct idsched_acpi {
@@ -70,14 +78,19 @@ struct idsched_core {
 };
 
 struct idsched_task {
-	void (*fn)(void *);
+	int  (*fn)(void *);
 	void  *arg;
 
 	idsched_t      *sched;
 	idsched_core_t *core;
 
 	ilib_uint32_t   flags;
-	ilib_uint64_t   seq;
+	idsched_tid     tid;
+
+	int status;
+
+	pthread_mutex_t lck;
+	pthread_cond_t  cv;
 };
 
 int idsched_create(idsched_t *sched, ilib_size_t ncores);
@@ -85,6 +98,11 @@ int idsched_destroy(idsched_t *sched);
 
 int idsched_core_startup(idsched_t *sched, ilib_size_t n);
 int idsched_core_shutdown(idsched_t *sched, ilib_size_t n);
+
+idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(void *), void *arg);
+int         idsched_task_submit(idsched_t *sch, idsched_task_t *t);
+int         idsched_task_wait(idsched_task_t *t, int *status);
+int         idsched_task_destroy(idsched_task_t *t);
 
 int idsched_run(idsched_t *sched);
 
@@ -95,7 +113,7 @@ int idsched_run(idsched_t *sched);
 #ifndef I_IDSCH_IMPL
 #define I_IDSCH_IMPL
 
-#include "stdlib.h"
+#include <stdlib.h>
 
 #ifndef PQUEUE_IMPLEMENTATION
 #define PQUEUE_IMPLEMENTATION
@@ -108,10 +126,10 @@ static int i_task_cmp(const void *a, const void *b)
 	const idsched_task_t *ta;
 	const idsched_task_t *tb;
 
-	ta = (const idsched_task_t *)a;
-	tb = (const idsched_task_t *)b;
+	ta = *(idsched_task_t * const *)a;
+	tb = *(idsched_task_t * const *)b;
 
-	return (ta->seq > tb->seq) - (ta->seq < tb->seq);
+	return (ta->tid > tb->tid) - (ta->tid < tb->tid);
 }
 
 /* ---------------- PRIVATE METHODS ---------------- */
@@ -119,10 +137,34 @@ static int i_task_cmp(const void *a, const void *b)
 /* Main loop */
 static void i_core_run(idsched_core_t *core)
 {
+	idsched_task_t *t;
+
 	pthread_mutex_lock(&core->lck);
 
-	while (!(core->flags & IDSCHED_CORE_STOPPING))
-		pthread_cond_wait(&core->cv, &core->lck);
+	for (;;) {
+		while (pqueue_empty(&core->rq) && !(core->flags & IDSCHED_CORE_STOPPING))
+			pthread_cond_wait(&core->cv, &core->lck);
+
+		if (pqueue_empty(&core->rq) && (core->flags & IDSCHED_CORE_STOPPING))
+			break;
+
+		t = pqueue_top(&core->rq, idsched_task_t *);
+		pqueue_pop(&core->rq);
+
+		pthread_mutex_lock(&t->lck);
+		t->flags    = IDSCHED_TASK_RUNNING;
+		core->currt = t;
+
+		pthread_mutex_unlock(&core->lck);
+		int status = t->fn(t->arg);
+		pthread_mutex_lock(&core->lck);
+		t->status   = status;
+		t->flags    = IDSCHED_TASK_DONE;
+		pthread_cond_broadcast(&t->cv);
+
+		pthread_mutex_unlock(&t->lck);
+		core->currt = NULL;
+	}
 
 	pthread_mutex_unlock(&core->lck);
 }
@@ -139,9 +181,7 @@ static void *i_core_worker(void *arg)
 
 	/* TODO:
 	 * Perform worker shutdown:
-	 *   - finish / suspend current task
 	 *   - migrate queued tasks
-	 *   - cleanup
 	 * */
 
 	return NULL;
@@ -195,6 +235,8 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 	if (sched == NULL || ncores == 0)
 		return -1;
 
+	pthread_mutex_init(&sched->lck, NULL);
+
 	sched->ncores = ncores;
 	sched->nseq   = 0;
 	sched->cores  = calloc(ncores, sizeof(idsched_core_t));
@@ -212,7 +254,7 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 		pthread_mutex_init(&core->lck, NULL);
 		pthread_cond_init(&core->cv, NULL);
 
-		pqueue_construct(&core->rq, sizeof(idsched_task_t), i_task_cmp);
+		pqueue_construct(&core->rq, sizeof(idsched_task_t *), i_task_cmp);
 	}
 
 	sched->cores[0].flags  = IDSCHED_CORE_ONLINE;
@@ -245,12 +287,15 @@ int idsched_destroy(idsched_t *sched)
 
 	free(sched->cores);
 
+	pthread_mutex_destroy(&sched->lck);
 	sched->cores  = NULL;
 	sched->ncores = 0;
 	sched->nseq   = 0;
 
 	return 0;
 }
+
+/* CORE MANAGEMENT: STARTUP & SHUTDOWN */
 
 int idsched_core_startup(idsched_t *sched, ilib_size_t n)
 {
@@ -283,7 +328,6 @@ int idsched_core_startup(idsched_t *sched, ilib_size_t n)
 			pthread_mutex_unlock(&core->lck);
 			continue;
 		}
-
 		pthread_mutex_unlock(&core->lck);
 		++started;
 	}
@@ -318,14 +362,6 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 
 		pthread_mutex_unlock(&core->lck);
 
-		/* TODO:
-		 * Worker performs graceful shutdown:
-		 *   - stop accepting work
-		 *   - finish/suspend current work
-		 *   - migrate queued tasks
-		 *   - cleanup
-		 * */
-
 		pthread_join(core->thread, NULL);
 
 		pthread_mutex_lock(&core->lck);
@@ -338,6 +374,117 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 	}
 
 	return (int)stopped;
+}
+
+/* TASK MANAGEMENT */
+
+idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(void *), void *arg)
+{
+	if (sch == NULL || t == NULL || fn == NULL) return -1;
+
+	t->fn     = fn;
+	t->arg    = arg;
+	t->sched  = sch;
+	t->core   = NULL;
+	t->flags  = IDSCHED_TASK_NEW;
+	t->status = 0;
+
+	pthread_mutex_init(&t->lck, NULL);
+	pthread_cond_init(&t->cv, NULL);
+
+	pthread_mutex_lock(&sch->lck);
+	t->tid = sch->nseq++;
+	pthread_mutex_unlock(&sch->lck);
+
+	return t->tid;
+}
+
+int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
+{
+	idsched_core_t *core;
+	ilib_size_t     i, online, target, seen;
+
+	if (sch == NULL || t == NULL) return -1;
+	if (!(t->flags & IDSCHED_TASK_NEW)) return -1;
+
+	online = 0;
+	for (i = 1; i < sch->ncores; ++i) {
+		pthread_mutex_lock(&sch->cores[i].lck);
+		if ((sch->cores[i].flags & IDSCHED_CORE_ONLINE) &&
+		    !(sch->cores[i].flags & IDSCHED_CORE_STOPPING))
+			++online;
+		pthread_mutex_unlock(&sch->cores[i].lck);
+	}
+
+	if (online == 0) return -1;
+
+	target = t->tid % online;
+
+	core = NULL;
+	seen = 0;
+
+	for (i = 1; i < sch->ncores; ++i) {
+		pthread_mutex_lock(&sch->cores[i].lck);
+
+		if ((sch->cores[i].flags & IDSCHED_CORE_ONLINE) &&
+		    !(sch->cores[i].flags & IDSCHED_CORE_STOPPING)) {
+			if (seen == target) {
+				core = &sch->cores[i];
+				break;
+			}
+			++seen;
+		}
+
+		pthread_mutex_unlock(&sch->cores[i].lck);
+	}
+
+	if (core == NULL) return -1;
+
+	t->core  = core;
+	t->flags = IDSCHED_TASK_READY;
+
+	pqueue_push(&core->rq, &t);
+	pthread_cond_signal(&core->cv);
+
+	pthread_mutex_unlock(&core->lck);
+
+	return 0;
+}
+
+int idsched_task_wait(idsched_task_t *t, int *status)
+{
+	if (t == NULL) return -1;
+
+	pthread_mutex_lock(&t->lck);
+
+	while (!(t->flags & IDSCHED_TASK_DONE))
+		pthread_cond_wait(&t->cv, &t->lck);
+
+	if (status != NULL)
+		*status = t->status;
+
+	pthread_mutex_unlock(&t->lck);
+
+	return 0;
+}
+
+int idsched_task_destroy(idsched_task_t *t)
+{
+	if (t == NULL || idsched_task_wait(t, NULL) != 0)
+		return -1;
+
+	pthread_mutex_destroy(&t->lck);
+	pthread_cond_destroy(&t->cv);
+
+	t->fn     = NULL;
+	t->arg    = NULL;
+	t->sched  = NULL;
+	t->core   = NULL;
+	t->flags  = IDSCHED_TASK_NEW;
+	t->tid    = 0;
+	t->status = 0;
+
+	return 0;
 }
 
 int idsched_run(idsched_t *sched)

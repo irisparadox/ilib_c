@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -pedantic -O3
+CFLAGS = -Wall -Wextra -std=c99 -pedantic -pthread
 
 TARGET = out/main
 
@@ -15,6 +15,7 @@ clean:
 	rm -rf out
 
 run:
+	make
 	out/main
 
 .PHONY: all clean
