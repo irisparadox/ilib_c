@@ -1,9 +1,7 @@
 #+title: Roadmap
 
 * SCHEDULER
-
 *** ABSTRACT
-
 **** Scheduler Design Goals
 
 I want each worker thread managed by the scheduler to represent a CPU core. Each core has its own unique ID, its own run queue, and can be brought online or shut down independently. Every core executes an infinite scheduling loop, continuously selecting and executing tasks. A task may either complete normally or run indefinitely, mirroring how a real operating system schedules threads.
@@ -179,7 +177,6 @@ No implementation decided yet.
   * Multiple schedulers communicating.
 
 *** RULES
-
 These are frozen unless there is a correctness issue.
 1. Every phase must compile before the next begins.
 2. Never implement a feature belonging to a later phase.
@@ -188,48 +185,246 @@ These are frozen unless there is a correctness issue.
 5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
 
 
-** DONE Implementation [44/44]
-*** DONE Phase 0 - Core Architecture [22/22]
-**** DONE Define scheduler data structures [4/4]
-***** DONE Implement =idsched_t=
-***** DONE Implement =idsched_core_t=
-***** DONE Implement =idsched_task_t=
-***** DONE Implement idsched_acpi_t
-**** DONE Core run queue [1/1]
-***** DONE Add the run queue with =queue.h=
-**** DONE Scheduler lifecycle [2/2]
-***** DONE Implement ~idsched_create()~
-***** DONE Implement ~idsched_destroy()~
-**** DONE Bootstrap core [2/2]
-***** DONE Initialize Core 0
-***** DONE Associate creator thread
-**** DONE Worker cores [3/3]
-***** DONE Startup worker threads
-***** DONE Initialize per-core state
-***** DONE Shutdown worker threads cleanly
-**** DONE Verify invariants [4/4]
-***** DONE Fixed number of cores
-***** DONE One queue per core
-***** DONE One pthread per worker core
-***** DONE Every task belongs to one scheduler
-*** DONE Phase 1 - Basic Task Execution [20/20]
-**** DONE Task API [2/2]
-***** DONE Implement ~idsched_task_create()~
-***** DONE Implement ~idsched_task_submit()~
-**** DONE Worker execution loop [4/4]
-***** DONE Wait for work
-***** DONE Execute =READY= tasks
-***** DONE Transition =READY= -> =RUNNING=
-***** DONE Transition =RUNNING= -> =DONE=
-**** DONE Graceful shutdown [1/1]
-***** DONE Stop accepting work
-**** DONE Test concurrent execution [2/2]
-***** DONE Single core
-***** DONE Multiple cores
-**** DONE Verify Invariants [6/6]
-***** DONE Every =READY= task is inside exactly one run queue.
-***** DONE Every =RUNNING= task belongs to exactly one core.
-***** DONE A task instances executes at most once.
-***** DONE No migration.
-***** DONE No priorities.
-***** DONE Tasks are assigned in sequential order to online cores.
+** Implementation [11/24]
+*** Phase 0 - Core Architecture [6/6]
+**** DONE Scheduler data structures
+- [X] Implement =idsched_t=
+- [X] Implement =idsched_core_t=
+- [X] Implement =idsched_task_t=
+- [X] Implement idsched_acpi_t
+**** DONE Core run queue
+- [X] Add the run queue with =queue.h=
+**** DONE Scheduler lifecycle
+- [X] Implement ~idsched_create()~
+- [X] Implement ~idsched_destroy()~
+**** DONE Bootstrap core
+- [X] Initialize Core 0
+- [X] Associate creator thread
+**** DONE Worker cores
+- [X] Startup worker threads
+- [X] Initialize per-core state
+- [X] Shutdown worker threads cleanly
+**** DONE Verify invariants
+- [X] Fixed number of cores
+- [X] One queue per core
+- [X] One pthread per worker core
+- [X] Every task belongs to one scheduler
+*** Phase 1 - Basic Task Execution [5/5]
+**** DONE Task API
+- [X] Implement ~idsched_task_create()~
+- [X] Implement ~idsched_task_submit()~
+**** DONE Worker execution loop
+- [X] Wait for work
+- [X] Execute =READY= tasks
+- [X] Transition =READY= -> =RUNNING=
+- [X] Transition =RUNNING= -> =DONE=
+**** DONE Graceful shutdown
+- [X] Stop accepting work
+**** DONE Test concurrent execution
+- [X] Single core
+- [X] Multiple cores
+**** DONE Verify Invariants
+- [X] Every =READY= task is inside exactly one run queue.
+- [X] Every =RUNNING= task belongs to exactly one core.
+- [X] A task instance executes at most once.
+- [X] No migration.
+- [X] No priorities.
+- [X] Tasks are assigned in sequential order to online cores.
+*** Phase 2 - Priority Scheduling [0/13]
+**** TODO Design the priority scheduling policy
+- [ ] Define the priority function.
+- [ ] Decide which task fields contribute to priority.
+- [ ] Document the ordering rules.
+**** TODO Extend task metadata
+- [ ] Add predicted runtime field.
+- [ ] Add scheduling priority field.
+- [ ] Add predictor bookkeeping if needed.
+**** TODO Measure runtime
+- [ ] Record task start timestamp.
+- [ ] Record completion timestamp.
+- [ ] Compute elapsed runtime.
+**** TODO Implement runtime predictors
+- [ ] Create predictor data structure.
+- [ ] Define minimum history requirements.
+- [ ] Implement runtime prediction.
+- [ ] Initialization.
+**** TODO Implement EMA
+- [ ] Implement EMA initialization.
+- [ ] Implement runtime EMA.
+**** TODO Add scheduler predictors
+- [ ] Add global runtime predictor.
+- [ ] Add one local predictor per core.
+- [ ] Initialize and destroy predictors.
+**** TODO Replace FIFO run queues
+- [ ] Replace comparator priorities.
+- [ ] Verify ordering invariants.
+**** TODO Compute task priority
+- [ ] Predict runtime when a task becomes =READY=.
+- [ ] Compute priority once.
+- [ ] Store priority inside the task.
+**** TODO Update predictors
+- [ ] Update executing core's local predictor.
+- [ ] Update global predictor.
+- [ ] Ensure updates occur after task completion.
+**** TODO Local/global prediction policy
+- [ ] Prefer local predictor when history is sufficient.
+- [ ] Fall back to global predictor otherwise.
+**** TODO Preserve scheduling invariants
+- [ ] =READY= tasks never change priority.
+- [ ] Predictor updates affect only future task instances.
+- [ ] Completed tasks update both predictors.
+**** TODO Testing
+- [ ] Verify priority queue ordering.
+- [ ] Verify FIFO replacement.
+- [ ] Verify EMA convergence.
+- [ ] Verify local predictor preference.
+- [ ] Verify global fallback.
+- [ ] Verify priority immutability.
+- [ ] Verify predictor updates occur only on completion.
+**** TODO Tag release
+- [ ] Create idsched-v0.2.0 tag.
+
+
+* HASHMAP
+*** ABSTRACT
+The hashmap library is a high-performance, generic associative container implemented as a single-header library targeting the ISO C99 standard. It is intended as a reusable building block for systems programming, emphasizing portability, predictable performance, and a compact public interface. The implementation follows the STB-style single-header philosophy, allowing the library to be integrated into projects with minimal configuration while remaining fully self-contained.
+
+The library implements a Swiss Table hash map using open addressing, cache-friendly probing, power-of-two capacities, and an 87.5% maximum load factor to maximize lookup and insertion performance while minimizing memory overhead. The implementation is designed to provide excellent average-case performance while maintaining predictable behavior under typical workloads.
+
+Keys and values are stored as opaque pointers without ownership, allowing applications to retain full control over object lifetime and memory management. Arbitrary key types are supported through user-defined hashing and comparison callbacks, while optimized built-in helpers are provided for common key types such as integers, pointers, C strings, and arbitrary byte sequences.
+
+To accommodate a wide variety of applications, memory management is abstracted through a configurable allocator vtable, enabling seamless integration with custom allocators, memory pools, arenas, and debugging allocators without affecting the public interface. The library remains fully functional on any conforming C99 implementation while transparently enabling SIMD-accelerated probing through compile-time feature detection on supported architectures. These optimizations remain entirely internal, preserving identical semantics regardless of the selected backend.
+
+The public API follows a POSIX-inspired design, relying on macro-defined flags and optional variadic arguments to extend function behavior while keeping common operations concise. Compile-time configuration is performed exclusively through preprocessor macros, allowing applications to tailor the library to their requirements without introducing unnecessary runtime abstraction. Invalid combinations of flags or required options constitute invalid API usage and are the responsibility of the caller.
+
+The library intentionally favors explicit caller responsibility over defensive runtime validation, prioritizing efficiency, flexibility, and composability. By exposing a minimal yet extensible interface while hiding implementation details, it provides a robust foundation for high-performance software and serves as a consistent component within a broader family of reusable C containers.
+*** ROADMAP
+**** Phase 1 - Public interface
+
+=Goal:= Define the complete public API and internal object model.
+
+- *Features* ::
+  * Single-header STB-style layout
+  * ISO C99 compatibility
+  * Compile-time configuration macros
+  * Generic void * key/value interface
+  * Allocator vtable
+  * Hash/comparison callback interfaces
+  * Public iterator interface
+  * Flag and option definitions
+  * Built-in hash helpers
+  * Built-in comparison helpers
+
+- *Invariants* ::
+  * API remains implementation-dependent.
+  * Keys and values are non-owning.
+  * All configuration is performed through macros.
+  * Invalid flags combinations constitute invalid API usage.
+
+**** Phase 2 - Swiss Table Core
+
+=Goal:= Implement the core hash table.
+
+- *Features* ::
+  * Control-byte array
+  * Fingerprint extraction
+  * Open addressing
+  * Probe sequence generation
+  * Lookup
+  * Insertion
+  * Replacement
+  * Removal
+  * Tombstone management
+
+- *Invariants* ::
+  * Capacity is always a power of two.
+  * Probe sequences terminate.
+  * Fingerprint accelerate comparisons.
+  * Table integrity is preserved after every operation.
+
+**** Phase 3 - Dynamic Storage
+
+=Goal:= Support automatic table growth.
+
+- *Features* ::
+  * Reserve
+  * Automatic growth
+  * Rehashing
+  * Load-factor tracking
+  * Clear
+  * Destroy
+
+- *Invariants* ::
+  * Maximum load factor is 87.5%.
+  * Growth doubles capacity.
+  * Rehash preserves all entries.
+
+**** Phase 4 - SIMD Optimization
+
+=Goal:= Accelerate probing on supported architectures.
+
+- *Features* ::
+  * Portable scalar implementation
+  * SSE2 probing
+  * AVX2 probing
+  * ARM NEON probing
+  * Compile-time backend selection
+
+- *Invariants* ::
+  * SIMD never changes observable behaviour.
+  * Scalar implementation remains the reference.
+
+**** Phase 5 - Utility layer
+
+=Goal:= Improve usability without affecting the core engine.
+
+- *Features* ::
+  * Iteration macros
+  * Debug validation
+  * Statistics
+  * Capacity inspection
+  * Benchmark utilities
+
+- *Invariants* ::
+  * Utility features do not affect performance-critical paths.
+
+**** Phase 6 - Future work
+- Optional ownership semantics
+- Copy callbacks
+- Thread-safe wrapper
+- Incremental rehashing
+- Alternative probing strategies
+*** RULES
+These are frozen unless there is a correctness issue.
+1. Every phase must compile before the next begins.
+2. Never implement a feature belonging to a later phase.
+3. No optimization before correctness within a phase.
+4. Each phase has clear invariants that must never be violated.
+5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
+
+** Implementation [5/5]
+*** Phase 1 - Public Interface [5/5]
+**** DONE Create public type definitions
+- [X] Define opaque hashmap type.
+- [X] Define entry type.
+- [X] Define iterator type.
+- [X] Define allocator types.
+**** DONE Create callback interfaces
+- [X] Define hash callback prototype.
+- [X] Define comparison callback prototype.
+- [X] Define allocator callback prototypes.
+**** DONE Define compile-time configuration
+- [X] Add implementation macro.
+- [X] Add feature detection macros.
+- [X] Add default configuration macros.
+**** DONE Define public constants
+- [X] Define operation flags.
+- [X] Define option flags.
+- [X] Define error codes.
+- [X] Define default configuration values.
+**** DONE Declare the public API
+- [X] Declare lifecycle functions.
+- [X] Declare lookup functions.
+- [X] Declare modification functions.
+- [X] Declare iterator functions.
+- [X] Declare utility functions.

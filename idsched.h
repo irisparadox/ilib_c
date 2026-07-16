@@ -91,6 +91,10 @@ struct idsched_task {
 
 	int status;
 
+	ilib_uint64_t   rt;    /* runtime */
+	ilib_uint64_t   pred;  /* prediction */
+	ilib_uint64_t   prio;  /* priority */
+
 	pthread_mutex_t lck;
 	pthread_cond_t  cv;
 };
