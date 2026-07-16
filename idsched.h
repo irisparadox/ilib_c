@@ -46,6 +46,8 @@ typedef ilib_uint64_t idsched_tid;
 
 struct idsched {
 	ilib_size_t     ncores;
+	ilib_size_t     online;
+
 	ilib_uint64_t   nseq;
 	idsched_core_t *cores;
 
@@ -153,11 +155,14 @@ static void i_core_run(idsched_core_t *core)
 
 		pthread_mutex_lock(&t->lck);
 		t->flags    = IDSCHED_TASK_RUNNING;
+		pthread_mutex_unlock(&t->lck);
 		core->currt = t;
 
 		pthread_mutex_unlock(&core->lck);
 		int status = t->fn(t->arg);
 		pthread_mutex_lock(&core->lck);
+
+		pthread_mutex_lock(&t->lck);
 		t->status   = status;
 		t->flags    = IDSCHED_TASK_DONE;
 		pthread_cond_broadcast(&t->cv);
@@ -196,33 +201,27 @@ static int i_is_bst_core(idsched_t *sched)
 
 static idsched_core_t *i_core_shtdwn_n(idsched_t *sched)
 {
-	ilib_size_t     i;
-	idsched_core_t *core = NULL;
+	ilib_size_t i;
 
 	for (i = 1; i < sched->ncores; ++i) {
-		pthread_mutex_lock(&sched->cores[i].lck);
-		if (sched->cores[i].flags & IDSCHED_CORE_ONLINE) {
-			core = &sched->cores[i];
-			pthread_mutex_unlock(&sched->cores[i].lck);
-
-			break;
-		}
-		pthread_mutex_unlock(&sched->cores[i].lck);
+		if ((sched->cores[i].flags & IDSCHED_CORE_ONLINE) &&
+		    !(sched->cores[i].flags & IDSCHED_CORE_STOPPING))
+			return &sched->cores[i];
 	}
 
-	return core;
+	return NULL;
 }
 
 static ilib_size_t i_cntr_flag(idsched_t *sched, ilib_uint32_t flag)
 {
 	ilib_size_t i;
 	ilib_size_t cnt = 0;
+
 	for (i = 1; i < sched->ncores; ++i) {
-		pthread_mutex_lock(&sched->cores[i].lck);
 		if (sched->cores[i].flags & flag)
 			++cnt;
-		pthread_mutex_unlock(&sched->cores[i].lck);
 	}
+
 	return cnt;
 }
 
@@ -239,6 +238,7 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 
 	sched->ncores = ncores;
 	sched->nseq   = 0;
+	sched->online = 0;
 	sched->cores  = calloc(ncores, sizeof(idsched_core_t));
 
 	if (sched->cores == NULL) return -1;
@@ -290,6 +290,7 @@ int idsched_destroy(idsched_t *sched)
 	pthread_mutex_destroy(&sched->lck);
 	sched->cores  = NULL;
 	sched->ncores = 0;
+	sched->online = 0;
 	sched->nseq   = 0;
 
 	return 0;
@@ -306,6 +307,8 @@ int idsched_core_startup(idsched_t *sched, ilib_size_t n)
 
 	if (sched == NULL || !i_is_bst_core(sched)) return -1;
 
+	pthread_mutex_lock(&sched->lck);
+
 	offline = i_cntr_flag(sched, IDSCHED_CORE_OFFLINE);
 
 	if (n == IDSCHED_ALL_CORES || n > offline)
@@ -316,21 +319,21 @@ int idsched_core_startup(idsched_t *sched, ilib_size_t n)
 	for (i = 1; i < sched->ncores && started < n; ++i) {
 		core = &sched->cores[i];
 
-		pthread_mutex_lock(&core->lck);
 		if (!(core->flags & IDSCHED_CORE_OFFLINE)) {
-			pthread_mutex_unlock(&core->lck);
 			continue;
 		}
 
 		core->flags = IDSCHED_CORE_ONLINE;
 
 		if (pthread_create(&core->thread, NULL, i_core_worker, core) != 0) {
-			pthread_mutex_unlock(&core->lck);
 			continue;
 		}
-		pthread_mutex_unlock(&core->lck);
+
+		++sched->online;
 		++started;
 	}
+
+	pthread_mutex_unlock(&sched->lck);
 
 	return (int)started;
 }
@@ -343,32 +346,36 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 
 	if (sched == NULL || !i_is_bst_core(sched)) return -1;
 
-	online = i_cntr_flag(sched, IDSCHED_CORE_ONLINE);
+	pthread_mutex_lock(&sched->lck);
+	online = sched->online;
 
 	if (n == IDSCHED_ALL_CORES || n > online)
 		n = online;
 
+	pthread_mutex_unlock(&sched->lck);
 	stopped = 0;
 
 	while (stopped < n) {
+		pthread_mutex_lock(&sched->lck);
 		core = i_core_shtdwn_n(sched);
 
-		if (core == NULL) break;
+		if (core == NULL) {
+			pthread_mutex_unlock(&sched->lck);
+			break;
+		}
+		core->flags |= IDSCHED_CORE_STOPPING;
+		pthread_mutex_unlock(&sched->lck);
 
 		pthread_mutex_lock(&core->lck);
-
-		core->flags |= IDSCHED_CORE_STOPPING;
 		pthread_cond_signal(&core->cv);
-
 		pthread_mutex_unlock(&core->lck);
 
 		pthread_join(core->thread, NULL);
 
-		pthread_mutex_lock(&core->lck);
-
+		pthread_mutex_lock(&sched->lck);
 		core->flags = IDSCHED_CORE_OFFLINE;
-
-		pthread_mutex_unlock(&core->lck);
+		--sched->online;
+		pthread_mutex_unlock(&sched->lck);
 
 		++stopped;
 	}
@@ -402,30 +409,23 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 {
 	idsched_core_t *core;
-	ilib_size_t     i, online, target, seen;
+	ilib_size_t     i, target, seen;
 
 	if (sch == NULL || t == NULL) return -1;
 	if (!(t->flags & IDSCHED_TASK_NEW)) return -1;
 
-	online = 0;
-	for (i = 1; i < sch->ncores; ++i) {
-		pthread_mutex_lock(&sch->cores[i].lck);
-		if ((sch->cores[i].flags & IDSCHED_CORE_ONLINE) &&
-		    !(sch->cores[i].flags & IDSCHED_CORE_STOPPING))
-			++online;
-		pthread_mutex_unlock(&sch->cores[i].lck);
+	pthread_mutex_lock(&sch->lck);
+
+	if (sch->online == 0) {
+		pthread_mutex_unlock(&sch->lck);
+		return -1;
 	}
 
-	if (online == 0) return -1;
-
-	target = t->tid % online;
-
+	target = t->tid % sch->online;
 	core = NULL;
 	seen = 0;
 
 	for (i = 1; i < sch->ncores; ++i) {
-		pthread_mutex_lock(&sch->cores[i].lck);
-
 		if ((sch->cores[i].flags & IDSCHED_CORE_ONLINE) &&
 		    !(sch->cores[i].flags & IDSCHED_CORE_STOPPING)) {
 			if (seen == target) {
@@ -434,20 +434,22 @@ int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 			}
 			++seen;
 		}
-
-		pthread_mutex_unlock(&sch->cores[i].lck);
 	}
 
-	if (core == NULL) return -1;
+	if (core == NULL) {
+		pthread_mutex_unlock(&sch->lck);
+		return -1;
+	}
 
 	t->core  = core;
 	t->flags = IDSCHED_TASK_READY;
 
+	pthread_mutex_lock(&core->lck);
 	pqueue_push(&core->rq, &t);
 	pthread_cond_signal(&core->cv);
-
 	pthread_mutex_unlock(&core->lck);
 
+	pthread_mutex_unlock(&sch->lck);
 	return 0;
 }
 
