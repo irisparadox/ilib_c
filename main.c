@@ -1,201 +1,153 @@
-#define IDSCHED_IMPLEMENTATION
-#include "idsched.h"
-
+#define IHSTMAP_IMPLEMENTATION
+#include "ihstmap.h"
 #include <assert.h>
 #include <stdio.h>
-#include <stdatomic.h>
-#include <time.h>
 
+static void test_basic_insert_get(void) {
+	ihstmap_t map;
+	int a = 1, b = 2;
 
-#define NCORES 4
-#define NTASKS 32
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &b, 0) == IHSTMAP_OK);
+	assert(ihstmap_get(&map, &a) == &b);
 
-
-static atomic_int executed;
-static atomic_int running;
-static atomic_int max_running;
-
-
-/* ---------------------------------------------------------- */
-
-static void sleep_ms(long ms)
-{
-	struct timespec ts;
-
-	ts.tv_sec  = ms / 1000;
-	ts.tv_nsec = (ms % 1000) * 1000000;
-
-	nanosleep(&ts, NULL);
+	ihstmap_destroy(&map);
+	printf("test_basic_insert_get OK\n");
 }
 
+static void test_default_replace(void) {
+	ihstmap_t map;
+	int a = 1, b = 2, c = 3;
 
-/* ---------------------------------------------------------- */
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &b, 0) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &c, 0) == IHSTMAP_OK);
+	assert(ihstmap_get(&map, &a) == &c);
+	assert(ihstmap_size(&map) == 1);
 
-static int test_task(void *arg)
-{
-	int current;
-	int max;
-
-	(void)arg;
-
-	printf("executing task\n");
-
-	current = atomic_fetch_add(&running, 1) + 1;
-
-	max = atomic_load(&max_running);
-
-	while (current > max &&
-	       !atomic_compare_exchange_weak(&max_running,
-	                                     &max,
-	                                     current));
-
-	sleep_ms(10);
-
-	atomic_fetch_add(&executed, 1);
-	atomic_fetch_sub(&running, 1);
-
-	printf("finishing task\n");
-
-	return 0;
+	ihstmap_destroy(&map);
+	printf("test_default_replace OK\n");
 }
 
+static void test_istnorep(void) {
+	ihstmap_t map;
+	int a = 1, b = 2, c = 3;
 
-/* ---------------------------------------------------------- */
-/* Single worker core                                         */
-/* ---------------------------------------------------------- */
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &b, 0) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &c, IHSTMAP_ALTMODE, IHSTMAP_ISTNOREP) == IHSTMAP_ERREXIST);
+	assert(ihstmap_get(&map, &a) == &b);
 
-static void test_single_worker(void)
-{
-	idsched_t sched;
-	idsched_task_t task;
-	idsched_tid tid;
-	int status;
-
-
-	atomic_store(&executed, 0);
-	atomic_store(&running, 0);
-	atomic_store(&max_running, 0);
-
-
-	assert(idsched_create(&sched, 2) == 0);
-
-	assert(idsched_core_startup(&sched, IDSCHED_ALL_CORES) == 1);
-
-
-	tid = idsched_task_create(&sched,
-	                          &task,
-	                          test_task,
-	                          NULL);
-
-	assert(tid != IDSCHED_INVALID_TID);
-
-
-	assert(idsched_task_submit(&sched, &task) == 0);
-
-	printf("submitted task\n");
-
-
-	assert(idsched_task_wait(&task, &status) == 0);
-
-	assert(IDSCHED_WIFEXITED(status));
-	assert(IDSCHED_WEXITSTATUS(status) == 0);
-
-	assert(task.flags & IDSCHED_TASK_DONE);
-
-	assert(atomic_load(&executed) == 1);
-	assert(atomic_load(&max_running) == 1);
-
-
-	printf("[PASS] single worker execution\n");
-
-
-	assert(idsched_core_shutdown(&sched, IDSCHED_ALL_CORES) == 1);
-
-	assert(idsched_task_destroy(&task) == 0);
-
-	assert(idsched_destroy(&sched) == 0);
+	ihstmap_destroy(&map);
+	printf("test_istnorep OK\n");
 }
 
+static void test_istretex(void) {
+	ihstmap_t map;
+	int a = 1, b = 2, c = 3;
+	void *existing = NULL;
 
-/* ---------------------------------------------------------- */
-/* Multiple worker cores                                      */
-/* ---------------------------------------------------------- */
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &b, 0) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &c, IHSTMAP_ALTMODE,
+	                       (ilib_uint32_t)(IHSTMAP_ISTREP | IHSTMAP_ISTRETEX), &existing) == IHSTMAP_OK);
+	assert(existing == &b);
+	assert(ihstmap_get(&map, &a) == &c);
 
-static void test_multiple_workers(void)
-{
-	idsched_t sched;
-	idsched_task_t tasks[NTASKS];
-	idsched_tid tid;
-	int status;
-	int i;
+	ihstmap_destroy(&map);
+	printf("test_istretex OK\n");
+}
 
+static void test_prehash(void) {
+	ihstmap_t map;
+	int a = 1, b = 2;
+	ilib_uint64_t hash;
 
-	atomic_store(&executed, 0);
-	atomic_store(&running, 0);
-	atomic_store(&max_running, 0);
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+	hash = map.h->hash(&a, map.h->usrdata);
+	assert(ihstmap_insert(&map, &a, &b, IHSTMAP_PREHASH, hash) == IHSTMAP_OK);
+	assert(ihstmap_get(&map, &a) == &b);
 
+	ihstmap_destroy(&map);
+	printf("test_prehash OK\n");
+}
 
-	assert(idsched_create(&sched, NCORES) == 0);
+static void test_remove(void) {
+	ihstmap_t map;
+	int a = 1, b = 2;
 
-	assert(idsched_core_startup(&sched, IDSCHED_ALL_CORES)
-	       == NCORES - 1);
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &a, &b, 0) == IHSTMAP_OK);
+	assert(ihstmap_remove(&map, &a) == IHSTMAP_OK);
+	assert(ihstmap_get(&map, &a) == NULL);
+	assert(ihstmap_remove(&map, &a) == IHSTMAP_ERRNTFND);
 
+	ihstmap_destroy(&map);
+	printf("test_remove OK\n");
+}
 
-	for (i = 0; i < NTASKS; ++i) {
-		tid = idsched_task_create(&sched,
-		                          &tasks[i],
-		                          test_task,
-		                          NULL);
+static void test_tombstone_chain(void) {
+	ihstmap_t map;
+	int keys[3] = {1, 2, 3};
+	int vals[3] = {10, 20, 30};
 
-		assert(tid != IDSCHED_INVALID_TID);
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
 
-		assert(idsched_task_submit(&sched,
-		                           &tasks[i]) == 0);
+	/* Insert A, remove A, insert B, confirm C (inserted after) still
+	 * resolves correctly even if its probe chain crosses A's tombstone. */
+	assert(ihstmap_insert(&map, &keys[0], &vals[0], 0) == IHSTMAP_OK);
+	assert(ihstmap_remove(&map, &keys[0]) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &keys[1], &vals[1], 0) == IHSTMAP_OK);
+	assert(ihstmap_insert(&map, &keys[2], &vals[2], 0) == IHSTMAP_OK);
+
+	assert(ihstmap_get(&map, &keys[1]) == &vals[1]);
+	assert(ihstmap_get(&map, &keys[2]) == &vals[2]);
+	assert(ihstmap_get(&map, &keys[0]) == NULL);
+
+	ihstmap_destroy(&map);
+	printf("test_tombstone_chain OK\n");
+}
+
+static void test_errfull(void) {
+	ihstmap_t map;
+	int keys[64];
+	int vals[64];
+	ilib_size_t i, n;
+	int hit_full;
+
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+
+	n = sizeof(keys) / sizeof(keys[0]);
+	hit_full = 0;
+
+	for (i = 0; i < n; i++) {
+		keys[i] = (int)i;
+		vals[i] = (int)i * 10;
+
+		int rc = ihstmap_insert(&map, &keys[i], &vals[i], IHSTMAP_ALTMODE, IHSTMAP_ISTNOREP);
+		if (rc == IHSTMAP_ERRFULL) {
+			hit_full = 1;
+			break;
+		}
+		assert(rc == IHSTMAP_OK);
 	}
 
+	assert(hit_full == 1);
 
-	for (i = 0; i < NTASKS; ++i) {
-		assert(idsched_task_wait(&tasks[i], &status) == 0);
-
-		assert(IDSCHED_WIFEXITED(status));
-		assert(IDSCHED_WEXITSTATUS(status) == 0);
-
-		assert(tasks[i].flags & IDSCHED_TASK_DONE);
-	}
-
-
-	assert(atomic_load(&executed) == NTASKS);
-
-	/*
-	 * At least two workers should overlap.
-	 */
-	assert(atomic_load(&max_running) > 1);
-
-
-	printf("[PASS] multiple worker execution\n");
-
-
-	assert(idsched_core_shutdown(&sched, IDSCHED_ALL_CORES)
-	       == NCORES - 1);
-
-
-	for (i = 0; i < NTASKS; ++i)
-		assert(idsched_task_destroy(&tasks[i]) == 0);
-
-
-	assert(idsched_destroy(&sched) == 0);
+	ihstmap_destroy(&map);
+	printf("test_errfull OK\n");
 }
 
+int main(void) {
+	test_basic_insert_get();
+	test_default_replace();
+	test_istnorep();
+	test_istretex();
+	test_prehash();
+	test_remove();
+	test_tombstone_chain();
+	test_errfull();
 
-/* ---------------------------------------------------------- */
-
-int main(void)
-{
-	test_single_worker();
-
-	test_multiple_workers();
-
-	printf("All Phase 1 tests passed.\n");
-
+	printf("all tests passed\n");
 	return 0;
 }

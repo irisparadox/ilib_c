@@ -1,4 +1,4 @@
-#+title: Roadmap
+#+TITLE: Roadmap
 
 * SCHEDULER
 *** ABSTRACT
@@ -402,7 +402,7 @@ These are frozen unless there is a correctness issue.
 4. Each phase has clear invariants that must never be violated.
 5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
 
-** Implementation [5/5]
+** Implementation [15/15]
 *** Phase 1 - Public Interface [5/5]
 **** DONE Create public type definitions
 - [X] Define opaque hashmap type.
@@ -428,3 +428,38 @@ These are frozen unless there is a correctness issue.
 - [X] Declare modification functions.
 - [X] Declare iterator functions.
 - [X] Declare utility functions.
+*** Phase 2 - Swiss Table Core [10/10]
+**** DONE Implement control-byte array
+- [X] Define control-byte representation.
+- [X] Allocate control-byte storage.
+- [X] Initialize empty control bytes.
+**** DONE Implement fingerprint extraction
+- [X] Extract fingerprint from hash values.
+- [X] Encode fingerprints into control bytes.
+**** DONE Implement probe sequence generation
+- [X] Compute probe sequence.
+- [X] Guarantee probe termination.
+**** DONE Implement lookup
+- [X] Scan probe groups.
+- [X] Compare fingerprints before keys.
+- [X] Detect empty buckets.
+**** DONE Implement insertion
+- [X] Locate insertion buckets.
+- [X] Insert new entries.
+- [X] Update control bytes.
+**** DONE Implement replacement
+- [X] Detect existing keys.
+- [X] Replace stored values.
+**** DONE Implement removal
+- [X] Locate entries.
+- [X] Mark removed buckets.
+**** DONE Implement tombstone management
+- [X] Reuse tombstones during insertion.
+- [X] Preserve probe-chain correctness.
+**** DONE Implement variadics in insertion
+- [X] Implement all flag variadics.
+- [X] Implement all mode variadics.
+**** DONE Validate table invariants
+- [X] Enforce power-of-two capacities.
+- [X] Enforce maximum load factor.
+- [X] Preserve table integrity after every operation.
