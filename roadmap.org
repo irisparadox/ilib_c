@@ -185,7 +185,17 @@ These are frozen unless there is a correctness issue.
 5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
 
 
-** Implementation [11/24]
+*** Notes:
+**** Basic tasks priorities
+Tasks are ordered by increasing predicted runtime.
+
+If two READY tasks have identical predicted runtimes, they are ordered by
+their creation sequence number (tid) so scheduling remains deterministic.
+
+Priority is computed exactly once when a task transitions into READY and
+never changes afterwards.
+
+** Implementation [24/24]
 *** Phase 0 - Core Architecture [6/6]
 **** DONE Scheduler data structures
 - [X] Implement =idsched_t=
@@ -230,59 +240,59 @@ These are frozen unless there is a correctness issue.
 - [X] No migration.
 - [X] No priorities.
 - [X] Tasks are assigned in sequential order to online cores.
-*** Phase 2 - Priority Scheduling [0/13]
-**** TODO Design the priority scheduling policy
-- [ ] Define the priority function.
-- [ ] Decide which task fields contribute to priority.
-- [ ] Document the ordering rules.
-**** TODO Extend task metadata
-- [ ] Add predicted runtime field.
-- [ ] Add scheduling priority field.
-- [ ] Add predictor bookkeeping if needed.
-**** TODO Measure runtime
-- [ ] Record task start timestamp.
-- [ ] Record completion timestamp.
-- [ ] Compute elapsed runtime.
-**** TODO Implement runtime predictors
-- [ ] Create predictor data structure.
-- [ ] Define minimum history requirements.
-- [ ] Implement runtime prediction.
-- [ ] Initialization.
-**** TODO Implement EMA
-- [ ] Implement EMA initialization.
-- [ ] Implement runtime EMA.
-**** TODO Add scheduler predictors
-- [ ] Add global runtime predictor.
-- [ ] Add one local predictor per core.
-- [ ] Initialize and destroy predictors.
-**** TODO Replace FIFO run queues
-- [ ] Replace comparator priorities.
-- [ ] Verify ordering invariants.
-**** TODO Compute task priority
-- [ ] Predict runtime when a task becomes =READY=.
-- [ ] Compute priority once.
-- [ ] Store priority inside the task.
-**** TODO Update predictors
-- [ ] Update executing core's local predictor.
-- [ ] Update global predictor.
-- [ ] Ensure updates occur after task completion.
-**** TODO Local/global prediction policy
-- [ ] Prefer local predictor when history is sufficient.
-- [ ] Fall back to global predictor otherwise.
-**** TODO Preserve scheduling invariants
-- [ ] =READY= tasks never change priority.
-- [ ] Predictor updates affect only future task instances.
-- [ ] Completed tasks update both predictors.
-**** TODO Testing
-- [ ] Verify priority queue ordering.
-- [ ] Verify FIFO replacement.
-- [ ] Verify EMA convergence.
-- [ ] Verify local predictor preference.
-- [ ] Verify global fallback.
-- [ ] Verify priority immutability.
-- [ ] Verify predictor updates occur only on completion.
-**** TODO Tag release
-- [ ] Create idsched-v0.2.0 tag.
+*** Phase 2 - Priority Scheduling [13/13]
+**** DONE Design the priority scheduling policy
+- [X] Define the priority function.
+- [X] Decide which task fields contribute to priority.
+- [X] Document the ordering rules.
+**** DONE Extend task metadata
+- [X] Add predicted runtime field.
+- [X] Add scheduling priority field.
+- [X] Add predictor bookkeeping if needed.
+**** DONE Measure runtime
+- [X] Record task start timestamp.
+- [X] Record completion timestamp.
+- [X] Compute elapsed runtime.
+**** DONE Implement runtime predictors
+- [X] Create predictor data structure.
+- [X] Define minimum history requirements.
+- [X] Implement runtime prediction.
+- [X] Initialization.
+**** DONE Implement EMA
+- [X] Implement EMA initialization.
+- [X] Implement runtime EMA.
+**** DONE Add scheduler predictors
+- [X] Add global runtime predictor.
+- [X] Add one local predictor per core.
+- [X] Initialize and destroy predictors.
+**** DONE Replace FIFO run queues
+- [X] Replace comparator priorities.
+- [X] Verify ordering invariants.
+**** DONE Compute task priority
+- [X] Predict runtime when a task becomes =READY=.
+- [X] Compute priority once.
+- [X] Store priority inside the task.
+**** DONE Update predictors
+- [X] Update executing core's local predictor.
+- [X] Update global predictor.
+- [X] Ensure updates occur after task completion.
+**** DONE Local/global prediction policy
+- [X] Prefer local predictor when history is sufficient.
+- [X] Fall back to global predictor otherwise.
+**** DONE Preserve scheduling invariants
+- [X] =READY= tasks never change priority.
+- [X] Predictor updates affect only future task instances.
+- [X] Completed tasks update both predictors.
+**** DONE Testing
+- [X] Verify priority queue ordering.
+- [X] Verify FIFO replacement.
+- [X] Verify EMA convergence.
+- [X] Verify local predictor preference.
+- [X] Verify global fallback.
+- [X] Verify priority immutability.
+- [X] Verify predictor updates occur only on completion.
+**** DONE Tag release
+- [X] Create idsched-v0.2.0 tag.
 
 
 * HASHMAP

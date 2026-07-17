@@ -15,6 +15,7 @@
 
 #include "deftypei.h"
 #include "queue.h"
+#include "ihstmap.h"
 
 #define IDSCHED_CORE_OFFLINE  (1u << 0)
 #define IDSCHED_CORE_ONLINE   (1u << 1)
@@ -33,6 +34,18 @@
 
 #define IDSCHED_ALL_CORES     ((ilib_size_t)-1)
 
+#ifndef IDSCHED_PRED_MIN_HISTORY
+#define IDSCHED_PRED_MIN_HISTORY 16
+#endif  /* IDSCHED_PRED_MIN_HISTORY */
+
+#ifndef IDSCHED_DEFAULT_RUNTIME
+#define IDSCHED_DEFAULT_RUNTIME 1000000ULL
+#endif  /* IDSCHED_DEFAULT_RUNTIME */
+
+#ifndef IDSCHED_EMA_ALPHA
+#define IDSCHED_EMA_ALPHA 0.125f
+#endif  /* IDSCHED_EMA_ALPHA */
+
 #define IDSCHED_WIFEXITED(status)   ((status) >= 0)
 #define IDSCHED_WEXITSTATUS(status) (status)
 #define IDSCHED_INVALID_TID ((ilib_uint64_t)-1)
@@ -42,6 +55,19 @@ typedef struct idsched_acpi idsched_acpi_t;
 typedef struct idsched_core idsched_core_t;
 typedef struct idsched_task idsched_task_t;
 
+typedef struct i_pred_entry ipred_entry_t;
+typedef struct i_pred       ipred_t;
+
+struct i_pred {
+	pthread_mutex_t lck;
+	ihstmap_t       table;
+};
+
+struct i_pred_entry {
+	ilib_uint64_t ema;
+	ilib_uint64_t nsa;
+};
+
 typedef ilib_uint64_t idsched_tid;
 
 struct idsched {
@@ -50,6 +76,8 @@ struct idsched {
 
 	ilib_uint64_t   nseq;
 	idsched_core_t *cores;
+
+	ipred_t         gpred;
 
 	pthread_mutex_t lck;
 };
@@ -73,6 +101,7 @@ struct idsched_core {
 	pthread_cond_t  cv;
 
 	pqueue_t        rq;
+	ipred_t         lpred;
 
 	idsched_task_t *currt;
 
@@ -127,15 +156,35 @@ int idsched_run(idsched_t *sched);
 
 #include "queue.h"
 
+#include <time.h>
+
+#ifndef IHSTMAP_IMPLEMENTATION
+#define IHSTMAP_IMPLEMENTATION
+#endif  /* IHSTMAP_IMPLEMENTATION */
+
+#include "ihstmap.h"
+
+#define I_ONEMALPHA (1.0f - IDSCHED_EMA_ALPHA)
+
+static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt);
+
 static int i_task_cmp(const void *a, const void *b)
 {
 	const idsched_task_t *ta;
 	const idsched_task_t *tb;
+	int                   pc;
+	int                   idc;
 
 	ta = *(idsched_task_t * const *)a;
 	tb = *(idsched_task_t * const *)b;
 
-	return (ta->tid > tb->tid) - (ta->tid < tb->tid);
+	pc  = (ta->prio > tb->prio) -
+	      (ta->prio < tb->prio);
+
+	idc = (ta->tid > tb->tid) -
+	      (ta->tid < tb->tid);
+
+	return pc != 0 ? pc : idc;
 }
 
 /* ---------------- PRIVATE METHODS ---------------- */
@@ -144,7 +193,7 @@ static int i_task_cmp(const void *a, const void *b)
 static void i_core_run(idsched_core_t *core)
 {
 	idsched_task_t *t;
-
+	struct timespec t0, t1;
 	pthread_mutex_lock(&core->lck);
 
 	for (;;) {
@@ -163,12 +212,18 @@ static void i_core_run(idsched_core_t *core)
 		core->currt = t;
 
 		pthread_mutex_unlock(&core->lck);
+		clock_gettime(CLOCK_MONOTONIC, &t0);
 		int status = t->fn(t->arg);
+		clock_gettime(CLOCK_MONOTONIC, &t1);
 		pthread_mutex_lock(&core->lck);
 
 		pthread_mutex_lock(&t->lck);
 		t->status   = status;
 		t->flags    = IDSCHED_TASK_DONE;
+		t->rt = (ilib_uint64_t)(t1.tv_sec - t0.tv_sec) * 1000000000ULL
+			+ (ilib_uint64_t)(t1.tv_nsec - t0.tv_nsec);
+		i_pred_update(&core->lpred, t->fn, t->rt);
+		i_pred_update(&core->sched->gpred, t->fn, t->rt);
 		pthread_cond_broadcast(&t->cv);
 
 		pthread_mutex_unlock(&t->lck);
@@ -229,6 +284,73 @@ static ilib_size_t i_cntr_flag(idsched_t *sched, ilib_uint32_t flag)
 	return cnt;
 }
 
+/* prediction private methods */
+static int i_pred_init(ipred_t *p)
+{
+	pthread_mutex_init(&p->lck, NULL);
+	return ihstmap_construct(&p->table, NULL, NULL);
+}
+
+static int i_pred_destroy(ipred_t *p)
+{
+	pthread_mutex_destroy(&p->lck);
+	return ihstmap_destroy(&p->table);
+}
+
+static ilib_uint64_t i_pred_predict(ipred_t *p, int (*fn)(void *), ilib_uint64_t *nsa)
+{
+	ipred_entry_t *entry;
+	pthread_mutex_lock(&p->lck);
+
+	entry = ihstmap_get(&p->table, fn);
+
+	if (entry == NULL) {
+		*nsa = 0;
+		pthread_mutex_unlock(&p->lck);
+		return IDSCHED_DEFAULT_RUNTIME;
+	}
+
+	*nsa = entry->nsa;
+	pthread_mutex_unlock(&p->lck);
+
+	return entry->ema;
+}
+
+static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
+{
+	ipred_entry_t *entry;
+	pthread_mutex_lock(&p->lck);
+
+	entry = ihstmap_get(&p->table, fn);
+
+	if (entry == NULL) {
+		entry = malloc(sizeof(ipred_entry_t));
+		if (entry == NULL) {
+			pthread_mutex_unlock(&p->lck);
+			return -1;
+		}
+
+		entry->ema = rt;
+		entry->nsa = 1;
+
+		if (ihstmap_insert(&p->table, fn, entry, 0) != 0) {
+			free(entry);
+			pthread_mutex_unlock(&p->lck);
+			return -1;
+		}
+
+		pthread_mutex_unlock(&p->lck);
+
+		return 0;
+	}
+
+	entry->ema = (ilib_uint64_t)(IDSCHED_EMA_ALPHA * rt + I_ONEMALPHA * entry->ema);
+	++entry->nsa;
+
+	pthread_mutex_unlock(&p->lck);
+	return 0;
+}
+
 /* ---------------- CREATION / DESTRUCTION ---------------- */
 
 int idsched_create(idsched_t *sched, ilib_size_t ncores)
@@ -244,6 +366,7 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 	sched->nseq   = 0;
 	sched->online = 0;
 	sched->cores  = calloc(ncores, sizeof(idsched_core_t));
+	i_pred_init(&sched->gpred);
 
 	if (sched->cores == NULL) return -1;
 
@@ -255,6 +378,7 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 		core->currt = NULL;
 		core->flags = IDSCHED_CORE_OFFLINE;
 
+		i_pred_init(&core->lpred);
 		pthread_mutex_init(&core->lck, NULL);
 		pthread_cond_init(&core->cv, NULL);
 
@@ -284,13 +408,13 @@ int idsched_destroy(idsched_t *sched)
 		idsched_core_t *core = &sched->cores[i];
 
 		pqueue_destroy(&core->rq);
-
+		i_pred_destroy(&core->lpred);
 		pthread_mutex_destroy(&core->lck);
 		pthread_cond_destroy(&core->cv);
 	}
 
 	free(sched->cores);
-
+	i_pred_destroy(&sched->gpred);
 	pthread_mutex_destroy(&sched->lck);
 	sched->cores  = NULL;
 	sched->ncores = 0;
@@ -399,6 +523,9 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->core   = NULL;
 	t->flags  = IDSCHED_TASK_NEW;
 	t->status = 0;
+	t->rt     = 0;
+	t->pred   = 0;
+	t->prio   = 0;
 
 	pthread_mutex_init(&t->lck, NULL);
 	pthread_cond_init(&t->cv, NULL);
@@ -445,6 +572,13 @@ int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 		return -1;
 	}
 
+	ilib_uint64_t ns;
+	t->pred = i_pred_predict(&core->lpred, t->fn, &ns);
+
+	if (ns < IDSCHED_PRED_MIN_HISTORY)
+		t->pred = i_pred_predict(&sch->gpred, t->fn, &ns);
+
+	t->prio  = t->pred;
 	t->core  = core;
 	t->flags = IDSCHED_TASK_READY;
 
