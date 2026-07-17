@@ -27,14 +27,16 @@
 #define IHSTMAP_F_SIMD 1
 #endif  /* IHSTMAP_F_SIMD */
 
+#define IHSTMAP_2POWER_CHECK(x) ((x) == 0 || \
+       ((x) & ((x) - 1)) != 0)
+
 /* IHSTMAP_INITIAL_CAPACITY
  * Change the initial capacity to something else.
  * The value has to be a power of two, or else it won't compile.
  */
 #ifndef IHSTMAP_INITIAL_CAPACITY
 #define IHSTMAP_INITIAL_CAPACITY 16
-#elif ((IHSTMAP_INITIAL_CAPACITY) == 0 || \
-       ((IHSTMAP_INITIAL_CAPACITY) & ((IHSTMAP_INITIAL_CAPACITY) - 1)) != 0)
+#elif   IHSTMAP_2POWER_CHECK(IHSTMAP_INITIAL_CAPACITY)
 #error "The initial capacity has to be a power of 2"
 #endif  /* IHSTMAP_INITIAL_CAPACITY */
 
@@ -113,33 +115,37 @@ typedef ilib_uint32_t ihm_mode_t;
 
 /* IHSTMAP_PREHASH
  *     The hash value is provided by the caller.
- *     Requires an additional ilib_u64_t argument.
+ *     Requires an additional ilib_uint64_t argument.
  *
  * IHSTMAP_NOGROW
  *     Prevent the hashmap from increasing its capacity.
  *     The operation fails if additional space is required.
+ *     Takes precedence if combined with IHSTMAP_FORCEGROW.
  *
  * IHSTMAP_ALTMODE
  *     Enables mode field which makes insert mode differ
  *     from default behaviour.
+ *
+ * IHSTMAP_FRCGROW
+ *     Forces the table to grow before placing a new entry,
+ *     even if the current load factor would not require it.
+ *     Has no effect on keys that already exist (replace never
+ *     triggers growth).
+ *
+ * IHSTMAP_RAWCAP
+ *     Changes the growth trigger to compare size against raw
+ *     capacity instead of IHSTMAP_MAX_LOAD, allowing the table
+ *     to fill past the normal 87.5% threshold before growing.
+ *     Degrades average probe length as capacity is approached.
  */
 #define IHSTMAP_PREHASH (1 << 0)
 #define IHSTMAP_NOGROW  (1 << 1)
 #define IHSTMAP_ALTMODE (1 << 2)
+#define IHSTMAP_FRCGROW (1 << 3)
+#define IHSTMAP_RAWCAP  (1 << 4)
 
-/* flags:
- *   IHSTMAP_ALTMODE not set -> default behavior, equivalent to ISTREP,
- *       key is replaced on match, no retrieval.
- *   IHSTMAP_ALTMODE set     -> next variadic arg is an ilib_uint32_t mode:
- *       IHSTMAP_ISTREP    - replace value on key match.
- *       IHSTMAP_ISTNOREP  - do not modify existing value on key match,
- *                            return IHSTMAP_ERREXIST instead.
- *       (IHSTMAP_ISTREP | IHSTMAP_ISTRETEX) or
- *       (IHSTMAP_ISTNOREP | IHSTMAP_ISTRETEX)
- *                         - as above, additionally writes the existing
- *                           value to an out-param (TODO: variadics).
- * TODO: handle variadics (flags) once insert/remove/lookup are complete.
- */
+/* Insert mode flags for use with IHSTMAP_ALTMODE.
+ * See ihstmap_insert's declaration comment for read order and semantics. */
 #define IHSTMAP_ISTREP   (1 << 0)
 #define IHSTMAP_ISTNOREP (1 << 1)
 #define IHSTMAP_ISTRETEX (1 << 2)
@@ -223,6 +229,7 @@ extern const ihstmap_hash_t ihstmap_u64_hash;
 #endif /* !defined(IHM_MEMSET) || !defined(IHM_MEMCPY) */
 
 #include <stdarg.h>
+#include <stdio.h>
 
 struct ihstmap_al {
 	const ihstmap_al_ops_t *ops;
@@ -373,6 +380,47 @@ static int ihstmap__entries_alloc(ihstmap_t *map, ilib_size_t capacity)
 	return IHSTMAP_OK;
 }
 
+static ilib_size_t ihm__next_pow2(ilib_size_t n)
+{
+	if (n <= 1)
+		return 1;
+
+	--n;
+
+	n |= n >> 1;
+	n |= n >> 2;
+	n |= n >> 3;
+	n |= n >> 4;
+	n |= n >> 8;
+	n |= n >> 16;
+
+	if (sizeof(ilib_size_t) == 8)
+		n |= n >> 32;
+
+	return n + 1;
+}
+
+static void ihm__rehash_insert(ihstmap_ctrl_t *ctrl, ihstmap_entry_t *entries, ilib_size_t cap, const ihstmap_hash_t *h, const void *key, void *val)
+{
+	ilib_uint64_t hash;
+	ilib_size_t   mask;
+	ilib_size_t   idx;
+	ilib_size_t   step;
+
+	hash = h->hash(key, h->usrdata);
+	mask = cap - 1;
+	idx  = ihm__h1(hash) & mask;
+	step = 0;
+
+	while (!I_IHSTMAP_CTRL_IS_EMPTY(ctrl[idx])) {
+		++step;
+		idx = (idx + step) & mask;
+	}
+
+	ctrl[idx] = ihm__h2(hash);
+	entries[idx].key   = key;
+	entries[idx].value = val;
+}
 
 /* CONSTRUCTION AND DESTRUCTION */
 
@@ -456,11 +504,19 @@ void *ihstmap_get(const ihstmap_t *map, const void *key)
 }
 
 /* INSERTION */
-/* ihstmap_insert: insert or replace `key`/`val`.
+/* ihstmap_insert: insert or replace key/val.
  *
- * flags: IHSTMAP_ALTMODE  -> reads `mode` (ilib_uint32_t) next.
- *        IHSTMAP_PREHASH  -> reads `hash` (ilib_uint64_t) after mode.
+ * flags: IHSTMAP_ALTMODE    -> reads mode (ilib_uint32_t) next.
+ *        IHSTMAP_PREHASH    -> reads hash (ilib_uint64_t) after mode.
+ *        IHSTMAP_NOGROW     -> return IHSTMAP_ERRFULL instead of growing
+ *                              (takes precedence over IHSTMAP_FORCEGROW).
+ *        IHSTMAP_FRCGROW  -> grow before placing a new entry, even if
+ *                              the load factor wouldn't require it.
+ *        IHSTMAP_RAWCAP     -> grow trigger compares size against raw
+ *                              capacity instead of IHSTMAP_MAX_LOAD.
  * Variadic order: mode, [existing (void**) if mode & ISTRETEX], hash.
+ * These growth flags only apply when the key is new; a replace never
+ * triggers growth.
  *
  * mode: ISTREP replaces on match (default if ALTMODE unset).
  *       ISTNOREP fails with ERREXIST on match instead.
@@ -475,6 +531,7 @@ int ihstmap_insert(ihstmap_t *map, const void *key, void *val, ihm_flag_t flags,
 	ihstmap_entry_t  *entries;
 	ilib_size_t       tombidx;
 	int               hastomb;
+	int               err;
 
 	va_list    ap;
 	ihm_mode_t mode;
@@ -498,6 +555,7 @@ int ihstmap_insert(ihstmap_t *map, const void *key, void *val, ihm_flag_t flags,
 
 	va_end(ap);
 
+ probe:
 	ctrl    = (ihstmap_ctrl_t *)map->control;
 	entries = (ihstmap_entry_t *)map->entries;
 	hastomb = 0;
@@ -510,9 +568,24 @@ int ihstmap_insert(ihstmap_t *map, const void *key, void *val, ihm_flag_t flags,
 
 		if (I_IHSTMAP_CTRL_IS_EMPTY(c)) {
 			ilib_size_t target = hastomb ? tombidx : p.idx;
+			ilib_size_t thresh;
+			int         shouldgrow;
 
-			if (map->size + 1 > (map->capacity * IHSTMAP_MAX_LOAD) / 1000)
-				return IHSTMAP_ERRFULL;
+			thresh = (flags & IHSTMAP_RAWCAP) ? map->capacity :
+				 (map->capacity * IHSTMAP_MAX_LOAD) / 1000;
+
+			shouldgrow = (map->size + 1 > thresh) || (flags & IHSTMAP_FRCGROW);
+
+			if (shouldgrow) {
+				if (flags & IHSTMAP_NOGROW)
+					return IHSTMAP_ERRFULL;
+
+				err = ihstmap_reserve(map, map->capacity << 1);
+				if (err != IHSTMAP_OK) return err;
+
+				flags &= ~IHSTMAP_FRCGROW;
+				goto probe;
+			}
 
 			ctrl[target] = ihm__h2(h);
 			entries[target].key   = key;
@@ -580,6 +653,72 @@ int ihstmap_remove(ihstmap_t *map, const void *key)
 	}
 
 	return IHSTMAP_ERRNTFND;
+}
+
+int ihstmap_reserve(ihstmap_t *map, ilib_size_t capacity)
+{
+	ilib_size_t needed;
+	ilib_size_t newcap;
+	ihstmap_ctrl_t  *new_ctrl;
+	ihstmap_entry_t *new_entries;
+
+	ilib_size_t      oldcap;
+	ihstmap_ctrl_t  *old_ctrl;
+	ihstmap_entry_t *old_entries;
+
+	ilib_size_t i;
+
+	if (map == NULL)
+		return IHSTMAP_ERRINVAL;
+
+	if (capacity <= map->capacity)
+		return IHSTMAP_OK;
+
+	needed = (capacity * 1000) / IHSTMAP_MAX_LOAD + 1;
+	newcap = ihm__next_pow2(needed);
+
+	new_ctrl = I_MAPALLOC(map, newcap * sizeof(ihstmap_ctrl_t));
+	if (new_ctrl == NULL) {
+		return IHSTMAP_ERRNOMEM;
+	}
+
+	new_entries = I_MAPALLOC(map, newcap * sizeof(ihstmap_entry_t));
+	if (new_entries == NULL) {
+		I_MAPFREE(map, new_ctrl);
+		return IHSTMAP_ERRNOMEM;
+	}
+
+	IHM_MEMSET(new_ctrl, I_IHSTMAP_CTRL_EMPTY, newcap * sizeof(ihstmap_ctrl_t));
+
+	old_ctrl    = (ihstmap_ctrl_t *)map->control;
+	old_entries = (ihstmap_entry_t *)map->entries;
+	oldcap      = map->capacity;
+
+	for (i = 0; i < oldcap; ++i) {
+		if (I_IHSTMAP_CTRL_IS_FULL(old_ctrl[i]))
+			ihm__rehash_insert(new_ctrl, new_entries, newcap, map->h,
+					   old_entries[i].key, old_entries[i].value);
+	}
+
+	I_MAPFREE(map, old_ctrl);
+	I_MAPFREE(map, old_entries);
+
+	map->control  = new_ctrl;
+	map->entries  = new_entries;
+	map->capacity = newcap;
+
+	return IHSTMAP_OK;
+}
+
+int ihstmap_clear(ihstmap_t *map)
+{
+	if (map == NULL)
+		return IHSTMAP_ERRINVAL;
+
+	IHM_MEMSET(map->control, I_IHSTMAP_CTRL_EMPTY, map->capacity * sizeof(ihstmap_ctrl_t));
+
+	map->size = 0;
+	return IHSTMAP_OK;
 }
 
 /* UTILITY */

@@ -402,7 +402,7 @@ These are frozen unless there is a correctness issue.
 4. Each phase has clear invariants that must never be violated.
 5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
 
-** Implementation [15/15]
+** Implementation [21/21]
 *** Phase 1 - Public Interface [5/5]
 **** DONE Create public type definitions
 - [X] Define opaque hashmap type.
@@ -463,3 +463,27 @@ These are frozen unless there is a correctness issue.
 - [X] Enforce power-of-two capacities.
 - [X] Enforce maximum load factor.
 - [X] Preserve table integrity after every operation.
+*** Phase 3 - Dynamic Storage [6/6]
+**** DONE Implement reserve
+- [X] Validate requested capacity.
+- [X] Round capacity to the next power of two.
+- [X] Allocate new table storage.
+**** DONE Implement automatic growth
+- [X] Track current load factor.
+- [X] Trigger growth at 87.5% utilization.
+- [X] Double table capacity.
+**** DONE Implement rehashing
+- [X] Reinsert existing entries.
+- [X] Recompute probe locations.
+- [X] Preserve key/value associations.
+**** DONE Implement clear
+- [X] Remove all entries.
+- [X] Reset control-byte array.
+- [X] Preserve allocated capacity.
+**** DONE Revisit destroy
+- [X] Release table storage.
+- [X] Reset table state.
+**** DONE Validate storage invariants
+- [X] Enforce maximum load factor.
+- [X] Enforce doubling growth policy.
+- [X] Preserve all entries during rehash.

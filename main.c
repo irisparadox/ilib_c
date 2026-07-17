@@ -72,6 +72,105 @@ static void test_prehash(void) {
 	printf("test_prehash OK\n");
 }
 
+static void test_nogrow(void) {
+	ihstmap_t map;
+	int keys[64];
+	int vals[64];
+	ilib_size_t i;
+
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+
+	for (i = 0;; i++) {
+		keys[i] = (int)i;
+		vals[i] = (int)i;
+
+		int rc = ihstmap_insert(
+			&map,
+			&keys[i],
+			&vals[i],
+			IHSTMAP_NOGROW | IHSTMAP_ALTMODE,
+			IHSTMAP_ISTNOREP
+		);
+
+		if (rc == IHSTMAP_ERRFULL)
+			break;
+
+		assert(rc == IHSTMAP_OK);
+	}
+
+	assert(ihstmap_size(&map) == i);
+
+	ihstmap_destroy(&map);
+	printf("test_nogrow OK\n");
+}
+
+static void test_forcegrow(void) {
+	ihstmap_t map;
+	int k1 = 1, v1 = 2;
+	ilib_size_t cap_before;
+
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+
+	cap_before = ihstmap_capacity(&map);
+
+	assert(
+		ihstmap_insert(
+			&map,
+			&k1,
+			&v1,
+			IHSTMAP_FRCGROW
+		) == IHSTMAP_OK
+	);
+
+	assert(ihstmap_capacity(&map) > cap_before);
+
+	ihstmap_destroy(&map);
+	printf("test_forcegrow OK\n");
+}
+
+static void test_rawcap(void) {
+	ihstmap_t map;
+	int keys[64];
+	int vals[64];
+	ilib_size_t cap;
+	ilib_size_t i;
+
+	assert(ihstmap_construct(&map, NULL, NULL) == IHSTMAP_OK);
+
+	cap = ihstmap_capacity(&map);
+
+	for (i = 0; i < cap; i++) {
+		keys[i] = (int)i;
+		vals[i] = (int)i;
+
+		assert(
+			ihstmap_insert(
+				&map,
+				&keys[i],
+				&vals[i],
+				IHSTMAP_RAWCAP | IHSTMAP_NOGROW | IHSTMAP_ALTMODE,
+				IHSTMAP_ISTNOREP
+			) == IHSTMAP_OK
+		);
+	}
+
+	keys[i] = (int)i;
+	vals[i] = (int)i;
+
+	assert(
+		ihstmap_insert(
+			&map,
+			&keys[i],
+			&vals[i],
+			IHSTMAP_RAWCAP | IHSTMAP_NOGROW | IHSTMAP_ALTMODE,
+			IHSTMAP_ISTNOREP
+		) == IHSTMAP_ERRFULL
+	);
+
+	ihstmap_destroy(&map);
+	printf("test_rawcap OK\n");
+}
+
 static void test_remove(void) {
 	ihstmap_t map;
 	int a = 1, b = 2;
@@ -124,7 +223,7 @@ static void test_errfull(void) {
 		keys[i] = (int)i;
 		vals[i] = (int)i * 10;
 
-		int rc = ihstmap_insert(&map, &keys[i], &vals[i], IHSTMAP_ALTMODE, IHSTMAP_ISTNOREP);
+		int rc = ihstmap_insert(&map, &keys[i], &vals[i], IHSTMAP_ALTMODE | IHSTMAP_NOGROW, IHSTMAP_ISTNOREP);
 		if (rc == IHSTMAP_ERRFULL) {
 			hit_full = 1;
 			break;
@@ -144,6 +243,9 @@ int main(void) {
 	test_istnorep();
 	test_istretex();
 	test_prehash();
+	test_nogrow();
+	test_forcegrow();
+	test_rawcap();
 	test_remove();
 	test_tombstone_chain();
 	test_errfull();
