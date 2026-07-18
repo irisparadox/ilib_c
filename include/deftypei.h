@@ -28,4 +28,10 @@ typedef unsigned long  ilib_uintptr_t;
 	((ilib_size_t)&(((type *)0)->member))
 #endif /* defined(__GNUC__) || defined(__clang__) */
 
+#if defined(__GNUC__) || defined(__clang__)
+#define ILIB_ALIGN(n) __attribute__((aligned(n)))
+#else
+#error "Unsupported compiler."
+#endif
+
 #endif /* DEFTYPEI_H */
