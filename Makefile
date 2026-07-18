@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -D_POSIX_C_SOURCE=200809L -Iinclude -Iarch -Wall -Wextra -std=c99 -pedantic -pthread
+CFLAGS = -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -Iinclude -Iarch -Wall -Wextra -std=c99 -pedantic -pthread -g3 -O0
 
 TARGET = out/main
 
@@ -7,8 +7,9 @@ ARCH = x86-64
 ARCHDIR = arch/$(ARCH)
 
 ASMSRC = $(wildcard $(ARCHDIR)/*.S)
+LIBSRC = $(wildcard src/*.c)
 
-SRC = tests/main.c $(ASMSRC)
+SRC = tests/main.c $(ASMSRC) $(LIBSRC)
 
 GENOFFSETS = out/genoffsets
 ASMOFFSETS = arch/x86-64/i_context_asm.h

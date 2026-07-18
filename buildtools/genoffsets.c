@@ -1,3 +1,5 @@
+#include <deftypei.h>
+#include <signal.h>
 #include <stdio.h>
 #include <icontext.h>
 
@@ -8,10 +10,13 @@ int main(void)
 	puts("#define I_CONTEXT_ASM_H_");
 	puts("");
 
+	printf("#define SIG_BLOCK 0\n");
+	printf("#define SIG_SETMASK 2\n");
+
+	puts("");
+
 	printf("#define IMREG_R8      %d\n", IMREG_R8);
 	printf("#define IMREG_R9      %d\n", IMREG_R9);
-	printf("#define IMREG_R10     %d\n", IMREG_R10);
-	printf("#define IMREG_R11     %d\n", IMREG_R11);
 	printf("#define IMREG_R12     %d\n", IMREG_R12);
 	printf("#define IMREG_R13     %d\n", IMREG_R13);
 	printf("#define IMREG_R14     %d\n", IMREG_R14);
@@ -21,7 +26,6 @@ int main(void)
 	printf("#define IMREG_RBP     %d\n", IMREG_RBP);
 	printf("#define IMREG_RBX     %d\n", IMREG_RBX);
 	printf("#define IMREG_RDX     %d\n", IMREG_RDX);
-	printf("#define IMREG_RAX     %d\n", IMREG_RAX);
 	printf("#define IMREG_RCX     %d\n", IMREG_RCX);
 	printf("#define IMREG_RSP     %d\n", IMREG_RSP);
 	printf("#define IMREG_RIP     %d\n", IMREG_RIP);
@@ -37,6 +41,12 @@ int main(void)
 	printf("#define IC_FPREGS %zu\n",
 		ILIB_OFFSETOF(icontext_t, ic_mcontext) +
 		ILIB_OFFSETOF(imcontext_t, fpregs));
+
+	printf("#define IC_SIGMASK %zu\n",
+		ILIB_OFFSETOF(icontext_t, ic_sigmask));
+
+	printf("#define IC_NSIG8 %d\n",
+	       _NSIG / 8);
 
 	puts("");
 	puts("#endif");
