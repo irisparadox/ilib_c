@@ -6,7 +6,7 @@ TARGET = out/main
 ARCH = x86-64
 ARCHDIR = arch/$(ARCH)
 
-ASMSRC = $(wildcard $(ARCHDIR)/*.S)
+ASMSRC = $(wildcard $(ARCHDIR)/*.S $(ARCHDIR)/*.c)
 LIBSRC = $(wildcard src/*.c)
 
 SRC = tests/main.c $(ASMSRC) $(LIBSRC)

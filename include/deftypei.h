@@ -23,15 +23,13 @@ typedef unsigned long  ilib_uintptr_t;
 #if defined(__GNUC__) || defined(__clang__)
 #define ILIB_OFFSETOF(type, member) \
 	__builtin_offsetof(type, member)
+#define ILIB_ALIGN(n) __attribute__((aligned(n)))
+#define ILIB_HIDDEN __attribute__((visibility("hidden")))
 #else
 #define ILIB_OFFSETOF(type, member) \
 	((ilib_size_t)&(((type *)0)->member))
+#define ILIB_ALIGN
+#define ILIB_HIDDEN
 #endif /* defined(__GNUC__) || defined(__clang__) */
-
-#if defined(__GNUC__) || defined(__clang__)
-#define ILIB_ALIGN(n) __attribute__((aligned(n)))
-#else
-#error "Unsupported compiler."
-#endif
 
 #endif /* DEFTYPEI_H */

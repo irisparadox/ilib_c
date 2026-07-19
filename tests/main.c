@@ -1,10 +1,79 @@
+#include "deftypei.h"
 #include <assert.h>
 #include <bits/stdint-uintn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <icontext.h>
+
+#define MAKECONTEXT_STACK_SIZE (64 * 1024)
+
+static icontext_t ctx_main;
+static icontext_t ctx_made;
+
+static int makectx_entry_ran;
+static ilib_uintptr_t makectx_args_seen[8];
+
+static void makectx_entry(ilib_uintptr_t a0, ilib_uintptr_t a1,
+			   ilib_uintptr_t a2, ilib_uintptr_t a3,
+			   ilib_uintptr_t a4, ilib_uintptr_t a5,
+			   ilib_uintptr_t a6, ilib_uintptr_t a7)
+{
+	/* Confirm the six register-passed args and the two
+	   stack-spilled args (argc > 6) all arrived intact.  */
+	makectx_args_seen[0] = a0;
+	makectx_args_seen[1] = a1;
+	makectx_args_seen[2] = a2;
+	makectx_args_seen[3] = a3;
+	makectx_args_seen[4] = a4;
+	makectx_args_seen[5] = a5;
+	makectx_args_seen[6] = a6;
+	makectx_args_seen[7] = a7;
+
+	makectx_entry_ran = 1;
+
+	/* Falling off the end here should trampoline back to
+	   ctx_made.ic_link, i.e. ctx_main, via __i_start_context.  */
+}
+
+static void test_makecontext(void)
+{
+	void *stack;
+	ilib_uintptr_t expected[8] = {
+		0x1111111111111111UL, 0x2222222222222222UL,
+		0x3333333333333333UL, 0x4444444444444444UL,
+		0x5555555555555555UL, 0x6666666666666666UL,
+		0x7777777777777777UL, 0x8888888888888888UL
+	};
+	int i;
+
+	stack = malloc(MAKECONTEXT_STACK_SIZE);
+	assert(stack != NULL);
+
+	igetcontext(&ctx_made);
+	ctx_made.ic_stack.ss_sp   = stack;
+	ctx_made.ic_stack.ss_size = MAKECONTEXT_STACK_SIZE;
+	ctx_made.ic_link          = &ctx_main;
+
+	imakecontext(&ctx_made, (void (*)(void)) makectx_entry, 8,
+		     expected[0], expected[1], expected[2], expected[3],
+		     expected[4], expected[5], expected[6], expected[7]);
+
+	/* Save the caller here as ctx_main, jump into ctx_made.
+	   makectx_entry runs, returns, and __i_start_context should
+	   isetcontext(&ctx_main), resuming right here.  */
+	iswapcontext(&ctx_main, &ctx_made);
+
+	assert(makectx_entry_ran == 1);
+	for (i = 0; i < 8; i++)
+		assert(makectx_args_seen[i] == expected[i]);
+
+	free(stack);
+
+	puts("makecontext test passed");
+}
 
 static int resumed;
 static int sig_resumed;
@@ -271,6 +340,7 @@ int main(void)
 
 	test_signal_mask();
 	test_swap();
+	test_makecontext();
 
 	return 0;
 }

@@ -12,13 +12,14 @@
 #define IMREG_RDI     6
 #define IMREG_RSI     7
 #define IMREG_RBP     8
-#define IMREG_RBX     9
-#define IMREG_RDX     10
-#define IMREG_RCX     11
-#define IMREG_RSP     12
-#define IMREG_RIP     13
-#define IMREG_RFLAGS  14
-#define IMREG_NGREG   15
+#define IMREG_RAX     9
+#define IMREG_RBX     10
+#define IMREG_RDX     11
+#define IMREG_RCX     12
+#define IMREG_RSP     13
+#define IMREG_RIP     14
+#define IMREG_RFLAGS  15
+#define IMREG_NGREG   16
 
 typedef ilib_uintptr_t imreg_t;
 typedef imreg_t        imregset_t[IMREG_NGREG];
