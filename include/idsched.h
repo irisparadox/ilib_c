@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
-#include <assert.h>
+#include <stdio.h>
 
 #if !defined(_POSIX_VERSION) || _POSIX_VERSION < 200809L
 #error "idsched.h needs a POSIX-compliant (POSIX.1-2008) system (pthreads, unistd.h)"
@@ -118,6 +118,7 @@ struct idsched_core {
 struct idsched_task {
 	int  (*fn)(void *);
 	void  *arg;
+	idsched_task_t *prnt;
 
 	icontext_t      ctx;
 
@@ -137,18 +138,21 @@ struct idsched_task {
 	pthread_cond_t  cv;
 };
 
+#define IDSCHED_INVALID_CHILD ((idsched_task_t *)-1)
+
 int idsched_create(idsched_t *sched, ilib_size_t ncores);
 int idsched_destroy(idsched_t *sched);
 
 int idsched_core_startup(idsched_t *sched, ilib_size_t n);
 int idsched_core_shutdown(idsched_t *sched, ilib_size_t n);
 
-idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(void *), void *arg);
-int         idsched_task_destroy(idsched_task_t *t);
-int         idsched_task_submit(idsched_t *sch, idsched_task_t *t);
-int         idsched_task_wait(idsched_task_t *t, int *status);
-int         idsched_task_yield(void);
-int         idsched_task_exec(int (*fn)(void *), void *arg);
+idsched_tid     idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(void *), void *arg);
+int             idsched_task_destroy(idsched_task_t *t);
+int             idsched_task_submit(idsched_t *sch, idsched_task_t *t);
+int             idsched_task_wait(idsched_task_t *t, int *status);
+int             idsched_task_yield(void);
+int             idsched_task_exec(int (*fn)(void *), void *arg);
+idsched_task_t *idsched_task_fork(void);
 
 int idsched_run(idsched_t *sched);
 
@@ -199,8 +203,8 @@ static int i_task_cmp(const void *a, const void *b)
 	pc  = (ta->prio > tb->prio) -
 	      (ta->prio < tb->prio);
 
-	idc = (ta->tid > tb->tid) -
-	      (ta->tid < tb->tid);
+	idc = (ta->tid < tb->tid) -
+	      (ta->tid > tb->tid);
 
 	return pc != 0 ? pc : idc;
 }
@@ -220,6 +224,8 @@ static void i_core_run(idsched_core_t *core)
 		if (pqueue_empty(&core->rq) && (core->flags & IDSCHED_CORE_STOPPING))
 			break;
 
+		printf("scheduler: queue size=%zu\n", core->rq.size);
+
 		t = pqueue_top(&core->rq, idsched_task_t *);
 		pqueue_pop(&core->rq);
 
@@ -229,6 +235,9 @@ static void i_core_run(idsched_core_t *core)
 		core->currt = t;
 
 		pthread_mutex_unlock(&core->lck);
+
+		printf("scheduler: switching to tid=%u\n", (unsigned)t->tid);
+		fflush(stdout);
 
 		iswapcontext(&core->shctx, &t->ctx);
 
@@ -557,6 +566,7 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 
 	t->fn     = fn;
 	t->arg    = arg;
+	t->prnt   = NULL;
 	t->sched  = sch;
 	t->core   = NULL;
 	t->flags  = IDSCHED_TASK_NEW;
@@ -720,6 +730,80 @@ int idsched_task_exec(int (*fn)(void *), void *arg)
 	isetcontext(&t->ctx);
 
 	return -1;
+}
+
+idsched_task_t *idsched_task_fork(void)
+{
+	idsched_core_t *core = i_core_self();
+	idsched_task_t *prnt = core->currt;
+
+	igetcontext(&prnt->ctx);
+
+	idsched_task_t *chld = malloc(sizeof(idsched_task_t));
+	if (chld == NULL) return IDSCHED_INVALID_CHILD;
+
+	pthread_mutex_init(&chld->lck, NULL);
+	pthread_cond_init(&chld->cv, NULL);
+
+	pthread_mutex_lock(&core->sched->lck);
+	chld->tid = core->sched->nseq++;
+	pthread_mutex_unlock(&core->sched->lck);
+
+	memcpy(&chld->ctx, &prnt->ctx, sizeof(icontext_t));
+
+	chld->ctx.ic_stack.ss_sp = malloc(prnt->ctx.ic_stack.ss_size);
+	if (chld->ctx.ic_stack.ss_sp == NULL) {
+		printf("fork: ss_sp malloc failed!\n");
+		pthread_mutex_destroy(&chld->lck);
+		pthread_cond_destroy(&chld->cv);
+		free(chld);
+		return IDSCHED_INVALID_CHILD;
+	}
+
+	chld->ctx.ic_stack.ss_size = prnt->ctx.ic_stack.ss_size;
+
+	memcpy(chld->ctx.ic_stack.ss_sp,
+	       prnt->ctx.ic_stack.ss_sp,
+	       prnt->ctx.ic_stack.ss_size);
+
+	ilib_uintptr_t off = prnt->ctx.ic_mcontext.gregs[IMREG_RSP] -
+			     (ilib_uintptr_t)prnt->ctx.ic_stack.ss_sp;
+
+	chld->ctx.ic_mcontext.gregs[IMREG_RSP] = (ilib_uintptr_t)chld->ctx.ic_stack.ss_sp + off;
+
+	off = prnt->ctx.ic_mcontext.gregs[IMREG_RBX] - (ilib_uintptr_t)prnt->ctx.ic_stack.ss_sp;
+
+	chld->ctx.ic_mcontext.gregs[IMREG_RBX] = (ilib_uintptr_t)chld->ctx.ic_stack.ss_sp + off;
+
+	off = prnt->ctx.ic_mcontext.gregs[IMREG_RBP] - (ilib_uintptr_t)prnt->ctx.ic_stack.ss_sp;
+
+	chld->ctx.ic_mcontext.gregs[IMREG_RBP] = (ilib_uintptr_t)chld->ctx.ic_stack.ss_sp + off;
+
+	chld->fn     = prnt->fn;
+	chld->arg    = prnt->arg;
+	chld->core   = prnt->core;
+	chld->pred   = prnt->pred;
+	chld->prio   = prnt->prio;
+	chld->sched  = prnt->sched;
+	chld->status = 0;
+	chld->rt     = 0;
+
+	chld->flags = IDSCHED_TASK_READY;
+
+	chld->ctx.ic_mcontext.gregs[IMREG_RAX] = (imreg_t)NULL;
+	chld->ctx.ic_link = &core->shctx;
+
+	pthread_mutex_lock(&core->lck);
+	pqueue_push(&core->rq, &chld);
+
+	printf("fork: queued child tid=%u\n", (unsigned)chld->tid);
+	printf("fork: parent tid=%u\n", (unsigned)prnt->tid);
+	printf("fork: queue size=%zu\n", core->rq.size);
+
+	pthread_cond_signal(&core->cv);
+	pthread_mutex_unlock(&core->lck);
+
+	return chld;
 }
 
 int idsched_run(idsched_t *sched)

@@ -9,7 +9,7 @@ ARCHDIR = arch/$(ARCH)
 ASMSRC = $(wildcard $(ARCHDIR)/*.S $(ARCHDIR)/*.c)
 LIBSRC = $(wildcard src/*.c)
 
-SRC = tests/schedctx.c $(ASMSRC) $(LIBSRC)
+SRC = tests/schedfork.c $(ASMSRC) $(LIBSRC)
 
 GENOFFSETS = out/genoffsets
 ASMOFFSETS = arch/x86-64/i_context_asm.h
