@@ -83,7 +83,7 @@ The exact policy for combining local and global predictions is intentionally lef
 
 **** Phase 3 - Dynamic Task Graph
 
-=Goal:= Tasks create more tasks.
+=Goal:= Running tasks can create and replace execution contexts.
 
 - *Features* ::
   * Parent/child relationship
@@ -94,9 +94,12 @@ The exact policy for combining local and global predictions is intentionally lef
 
 - *Invariants* ::
   * Children belong to the same scheduler.
-  * Child starts as =BLOCKED= or =READY= depending on dependencies.
-  * Parent continues executing after spawning.
-  * No context switching.
+  * ~task_fork()~ duplicates the parent's execution context.
+  * Parent and child resume at the same instruction.
+  * Parent and child execute on independent stacks.
+  * ~task_exec()~ replaces the current execution context.
+  * Child starts as READY unless blocked by dependencies.
+  * Parent continues executing after ~task_fork()~.
 
 **** Phase 4 - Core Management
 
