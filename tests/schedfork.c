@@ -11,6 +11,10 @@ static int forktask(void *arg)
 
 	idsched_task_t *child = idsched_task_fork();
 
+	printf("tid=%zu child=%p\n",
+	       i_core_self()->currt->tid,
+	       (void *)child);
+
 	if (child == NULL) {
 		printf("This is child\n");
 		return 0;
@@ -18,8 +22,9 @@ static int forktask(void *arg)
 
 	printf("This is parent 2\n");
 
-	/* Give the scheduler a chance to run the child. */
 	idsched_task_yield();
+
+	printf("After yield\n");
 
 	idsched_task_wait(child, NULL);
 	idsched_task_destroy(child);
