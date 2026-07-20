@@ -5,24 +5,30 @@
 #define IDSCHED_IMPLEMENTATION
 #include <idsched.h>
 
-static int forktask(void *arg)
+static int printcounter(void *arg)
 {
-	int x = 42;
-	int *px = &x;
+	(void)arg;
 
-	printf("before fork: &x=%p px=%p *px=%d\n",
-		(void *)&x, (void *)px, *px);
-
-	idsched_task_t *child = idsched_task_fork();
-
-	if (child == NULL) {
-		printf("child: &x=%p px=%p *px=%d\n",
-			(void *)&x, (void *)px, *px);
-	} else {
-		printf("parent: &x=%p px=%p *px=%d\n",
-			(void *)&x, (void *)px, *px);
+	for (int i = 0; i < 10; ++i) {
+		printf("%d\n", i);
 	}
 
+	return 0;
+}
+
+static int forktask(void *arg)
+{
+	idsched_task_t *t = idsched_task_fork();
+
+	if (t == NULL) {
+		idsched_task_exec(printcounter, NULL);
+		printf("error\n");
+	} else {
+		printf("parent now waits\n");
+		while(idsched_task_wait(t, NULL) == -1);
+	}
+
+	printf("Parent is done\n");
 	return 0;
 }
 

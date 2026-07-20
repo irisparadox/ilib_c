@@ -165,6 +165,7 @@ struct idsched_task {
 #define IDSCHED_SYS_YELD 2
 #define IDSCHED_SYS_WAIT 3
 #define IDSCHED_SYS_EXIT 4
+#define IDSCHED_SYS_EXEC 5
 
 #define IDSCHED_DISPATCH_CONTINUE 0
 #define IDSCHED_DISPATCH_STOP     1
@@ -187,7 +188,7 @@ int idsched_run(idsched_t *sched);
 
 #endif /* IDSCHED_H_ */
 
-#define IDSCHED_IMPLEMENTATION
+//#define IDSCHED_IMPLEMENTATION
 #ifdef IDSCHED_IMPLEMENTATION
 #ifndef I_IDSCH_IMPL
 #define I_IDSCH_IMPL
@@ -315,7 +316,8 @@ static void i_relocate_stack(idsched_task_t *prnt, idsched_task_t *chld)
 #endif /* defined(__x86_64__) */
 
 /* SCHEDULER-SPACE & SYSCALLS */
-static void i_sys_fork(idsched_core_t *core, idsched_task_t *prnt);
+static void i_sys_fork(idsched_task_t *t);
+static void i_sys_exec(idsched_task_t *t);
 static void i_sys_yield(idsched_task_t *t);
 static void i_sys_wait(idsched_task_t *t);
 static void i_sys_exit(idsched_task_t *t);
@@ -327,8 +329,11 @@ static int i_dispatch_schedcall(idsched_task_t *t)
 #endif
 	switch(t->sc_nr) {
 	case IDSCHED_SYS_FORK:
-		i_sys_fork(t->core, t);
+		i_sys_fork(t);
 		return IDSCHED_DISPATCH_CONTINUE;
+	case IDSCHED_SYS_EXEC:
+		i_sys_exec(t);
+		return IDSCHED_DISPATCH_STOP;
 	case IDSCHED_SYS_YELD:
 		i_sys_yield(t);
 		return IDSCHED_DISPATCH_STOP;
@@ -612,8 +617,10 @@ static void i_sys_wait(idsched_task_t *t)
 	t->sc_ret = 0;
 }
 
-static void i_sys_fork(idsched_core_t *core, idsched_task_t *prnt)
+static void i_sys_fork(idsched_task_t *t)
 {
+	idsched_task_t *prnt = t;
+	idsched_core_t *core = t->core;
 	idsched_task_t *chld = malloc(sizeof(idsched_task_t));
 	if (chld == NULL) {
 		prnt->sc_ret = (imreg_t)IDSCHED_INVALID_CHILD;
@@ -710,6 +717,21 @@ static void i_sys_fork(idsched_core_t *core, idsched_task_t *prnt)
 	pqueue_push(&core->rq, &chld);
 	pthread_cond_signal(&core->cv);
 	pthread_mutex_unlock(&core->lck);
+}
+
+static void i_sys_exec(idsched_task_t *t)
+{
+	int (*fn)(void *) = (void *)t->sc_arg[0];
+	void *arg = (void *)t->sc_arg[1];
+
+	t->fn  = fn;
+	t->arg = arg;
+
+	imakecontext(&t->ctx, (void (*)(void))i_task_entry, 1, t);
+	isetcontext(&t->ctx);
+
+	/* unreachable */
+	abort();
 }
 
 static void i_sys_yield(idsched_task_t *t)
@@ -1081,7 +1103,6 @@ int idsched_task_yield(void)
 	return (int)i_schedcall(task, IDSCHED_SYS_YELD);
 }
 
-
 int idsched_task_exec(int (*fn)(void *), void *arg)
 {
 	idsched_core_t *core = i_core_self();
@@ -1090,17 +1111,14 @@ int idsched_task_exec(int (*fn)(void *), void *arg)
 	idsched_task_t *t = core->currt;
 	if (t == NULL) return -1;
 
-	pthread_mutex_lock(&t->lck);
-	t->fn  = fn;
-	t->arg = arg;
-	pthread_mutex_unlock(&t->lck);
+	t->sc_arg[0] = (ilib_uintptr_t)fn;
+	t->sc_arg[1] = (ilib_uintptr_t)arg;
 
-	imakecontext(&t->ctx, (void (*)(void))i_task_entry, 1, t);
-	isetcontext(&t->ctx);
+	i_schedcall(t, IDSCHED_SYS_EXEC);
 
+	/* should never return */
 	return -1;
 }
-
 
 idsched_task_t *idsched_task_fork(void)
 {
