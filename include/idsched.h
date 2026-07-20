@@ -9,7 +9,6 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
-#include <stdio.h>
 
 #if !defined(_POSIX_VERSION) || _POSIX_VERSION < 200809L
 #error "idsched.h needs a POSIX-compliant (POSIX.1-2008) system (pthreads, unistd.h)"
@@ -56,6 +55,14 @@
 #ifndef IDSCHED_DEBUG
 #define IDSCHED_DEBUG 0
 #endif  /* IDSCHED_DEBUG */
+
+#if IDSCHED_DEBUG == 1
+#include <stdio.h>
+#endif
+
+#ifndef IDSCHED_DIRTY_STACK_SANITIZE
+#define IDSCHED_DIRTY_STACK_SANITIZE 0
+#endif  /* IDSCHED_DIRTY_STACK_SANITIZE */
 
 #define IDSCHED_WIFEXITED(status)   ((status) >= 0)
 #define IDSCHED_WEXITSTATUS(status) (status)
@@ -180,7 +187,7 @@ int idsched_run(idsched_t *sched);
 
 #endif /* IDSCHED_H_ */
 
-//#define IDSCHED_IMPLEMENTATION
+#define IDSCHED_IMPLEMENTATION
 #ifdef IDSCHED_IMPLEMENTATION
 #ifndef I_IDSCH_IMPL
 #define I_IDSCH_IMPL
@@ -263,6 +270,46 @@ static void i_fix_frame_chain(const idsched_task_t *prnt, idsched_task_t *chld)
 		off  = (ilib_uintptr_t)saved - plow;
 		*rbp = (imreg_t)(clow + off);
 		rbp  = (imreg_t *)*rbp;
+	}
+}
+
+static void i_relocate_stack(idsched_task_t *prnt, idsched_task_t *chld)
+{
+	ilib_uintptr_t old_base;
+	ilib_uintptr_t new_base;
+	ilib_intptr_t delta;
+
+	old_base = (ilib_uintptr_t)prnt->ctx.ic_stack.ss_sp;
+	new_base = (ilib_uintptr_t)chld->ctx.ic_stack.ss_sp;
+
+	delta = (ilib_intptr_t)(new_base - old_base);
+
+	ilib_uintptr_t *ptr = (ilib_uintptr_t *)new_base;
+
+	ilib_size_t words =
+		chld->ctx.ic_stack.ss_size / sizeof(ilib_uintptr_t);
+
+	for (ilib_size_t i = 0; i < words; ++i, ++ptr) {
+		ilib_uintptr_t val = *ptr;
+
+		/*
+		 * Pointer into parent's stack.
+		 */
+		if (val >= old_base &&
+		    val < old_base + prnt->ctx.ic_stack.ss_size) {
+			*ptr = (ilib_uintptr_t)((ilib_intptr_t)val + delta);
+			continue;
+		}
+
+		/*
+		 * Fix task self references.
+		 */
+		if (val == (ilib_uintptr_t)prnt) {
+			*ptr = (ilib_uintptr_t)chld;
+#if IDSCHED_DEBUG == 1
+			printf("relocate_stack: fix task self references with val %p -> %p\n", (void *)val, (void *)chld);
+#endif
+		}
 	}
 }
 #endif /* defined(__x86_64__) */
@@ -612,7 +659,7 @@ static void i_sys_fork(idsched_core_t *core, idsched_task_t *prnt)
 	       prnt->ctx.ic_stack.ss_sp,
 	       prnt->ctx.ic_stack.ss_size);
 
-#if defined(__x86_64__)
+#if IDSCHED_DIRTY_STACK_SANITIZE == 1
 	ilib_uintptr_t old_t = (ilib_uintptr_t)prnt;
 	ilib_uintptr_t new_t = (ilib_uintptr_t)chld;
 
@@ -623,7 +670,9 @@ static void i_sys_fork(idsched_core_t *core, idsched_task_t *prnt)
 		if (stack[i] == old_t)
 			stack[i] = new_t;
 	}
-#endif /* defined(__x86_64__) */
+#else
+	i_relocate_stack(prnt, chld);
+#endif /* IDSCHED_DIRTY_STACK_SANITIZE == 1 */
 #if IDSCHED_DEBUG == 1
 	printf("stack copy parent t=%p child t=%p\n",
 		(void *)prnt,

@@ -7,28 +7,22 @@
 
 static int forktask(void *arg)
 {
-	printf("This is parent\n");
+	int x = 42;
+	int *px = &x;
+
+	printf("before fork: &x=%p px=%p *px=%d\n",
+		(void *)&x, (void *)px, *px);
 
 	idsched_task_t *child = idsched_task_fork();
 
-	printf("tid=%zu child=%p\n",
-	       i_core_self()->currt->tid,
-	       (void *)child);
-
 	if (child == NULL) {
-		printf("This is child\n");
-		return 0;
+		printf("child: &x=%p px=%p *px=%d\n",
+			(void *)&x, (void *)px, *px);
+	} else {
+		printf("parent: &x=%p px=%p *px=%d\n",
+			(void *)&x, (void *)px, *px);
 	}
 
-	printf("This is parent 2\n");
-
-	idsched_task_yield();
-
-	printf("After yield\n");
-
-	idsched_task_wait(child, NULL);
-	idsched_task_destroy(child);
-	free(child);
 	return 0;
 }
 
