@@ -18,6 +18,7 @@
 #include <queue.h>
 #include <ihstmap.h>
 #include <icontext.h>
+#include <ilisti.h>
 
 #define IDSCHED_CORE_OFFLINE  (1u << 0)
 #define IDSCHED_CORE_ONLINE   (1u << 1)
@@ -86,6 +87,17 @@ struct i_pred_entry {
 	ilib_uint64_t nsa;
 };
 
+
+typedef struct iwaitq_entry {
+	ilinode_t       node;
+	idsched_task_t *task;
+} iwaitq_entry;
+
+typedef struct iwaitq {
+	pthread_mutex_t lck;
+	ilinode_t       head;
+} iwaitq;
+
 typedef ilib_uint64_t idsched_tid;
 
 struct idsched {
@@ -94,6 +106,8 @@ struct idsched {
 
 	ilib_uint64_t   nseq;
 	idsched_core_t *cores;
+
+	idsched_task_t *reaper;
 
 	ipred_t         gpred;
 
@@ -134,7 +148,12 @@ struct idsched_task {
 	void  *arg;
 
 	idsched_task_t *prnt;
-	idsched_task_t *waitchld;
+
+	ilinode_t children; /* list head.  */
+	ilinode_t sibling;  /* node in parent's children list.  */
+
+	iwaitq wait_chldexit;
+	iwaitq_entry wait;
 
 	icontext_t      ctx;
 
@@ -160,12 +179,13 @@ struct idsched_task {
 
 #define IDSCHED_INVALID_CHILD ((idsched_task_t *)-1)
 
-#define IDSCHED_SYS_NONE 0
-#define IDSCHED_SYS_FORK 1
-#define IDSCHED_SYS_YELD 2
-#define IDSCHED_SYS_WAIT 3
-#define IDSCHED_SYS_EXIT 4
-#define IDSCHED_SYS_EXEC 5
+#define IDSCHED_SYS_NONE  0
+#define IDSCHED_SYS_FORK  1
+#define IDSCHED_SYS_YIELD 2
+#define IDSCHED_SYS_WAIT  3
+#define IDSCHED_SYS_EXIT  4
+#define IDSCHED_SYS_EXEC  5
+#define IDSCHED_SYS_WAITT 6
 
 #define IDSCHED_DISPATCH_CONTINUE 0
 #define IDSCHED_DISPATCH_STOP     1
@@ -179,7 +199,8 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n);
 idsched_tid     idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(void *), void *arg);
 int             idsched_task_destroy(idsched_task_t *t);
 int             idsched_task_submit(idsched_t *sch, idsched_task_t *t);
-int             idsched_task_wait(idsched_task_t *t, int *wstatus);
+int             idsched_task_wait(int *wstatus);
+int             idsched_task_waittask(idsched_task_t *t, int *wstatus);
 int             idsched_task_yield(void);
 int             idsched_task_exec(int (*fn)(void *), void *arg);
 idsched_task_t *idsched_task_fork(void);
@@ -209,6 +230,12 @@ int idsched_run(idsched_t *sched);
 
 #include "ihstmap.h"
 
+#ifndef ILISTI_IMPLEMENTATION
+#define ILISTI_IMPLEMENTATION
+#endif  /* ILISTI_IMPLEMENTATION */
+
+#include <ilisti.h>
+
 #define I_ONEMALPHA (1.0f - IDSCHED_EMA_ALPHA)
 
 static pthread_key_t i_core_key;
@@ -233,8 +260,8 @@ static int i_task_cmp(const void *a, const void *b)
 	pc  = (ta->prio > tb->prio) -
 	      (ta->prio < tb->prio);
 
-	idc = (ta->tid < tb->tid) -
-	      (ta->tid > tb->tid);
+	idc = (ta->tid > tb->tid) -
+	      (ta->tid < tb->tid);
 
 	return pc != 0 ? pc : idc;
 }
@@ -320,6 +347,7 @@ static void i_sys_fork(idsched_task_t *t);
 static void i_sys_exec(idsched_task_t *t);
 static void i_sys_yield(idsched_task_t *t);
 static void i_sys_wait(idsched_task_t *t);
+static void i_sys_waittask(idsched_task_t *t);
 static void i_sys_exit(idsched_task_t *t);
 
 static int i_dispatch_schedcall(idsched_task_t *t)
@@ -334,11 +362,15 @@ static int i_dispatch_schedcall(idsched_task_t *t)
 	case IDSCHED_SYS_EXEC:
 		i_sys_exec(t);
 		return IDSCHED_DISPATCH_STOP;
-	case IDSCHED_SYS_YELD:
+	case IDSCHED_SYS_YIELD:
 		i_sys_yield(t);
 		return IDSCHED_DISPATCH_STOP;
 	case IDSCHED_SYS_WAIT:
-		i_sys_wait(t);
+	case IDSCHED_SYS_WAITT:
+		if (t->sc_nr == IDSCHED_SYS_WAIT)
+			i_sys_wait(t);
+		else
+			i_sys_waittask(t);
 
 		if (t->flags & IDSCHED_TASK_BLOCKED)
 			return IDSCHED_DISPATCH_STOP;
@@ -365,6 +397,72 @@ static long i_schedcall(idsched_task_t *t, int nr)
 	iswapcontext(&t->ctx, &t->core->shctx);
 
 	return i_core_self()->currt->sc_ret;
+}
+
+static int i_grimreaper(void *arg)
+{
+	(void)arg;
+
+	for (;;) {
+		idsched_task_yield();
+	}
+
+	return 0;
+}
+
+static int i_create_reaper(idsched_t *sch)
+{
+	idsched_task_t *d;
+
+	d = malloc(sizeof(idsched_task_t));
+	if (d == NULL) return -1;
+
+	if (idsched_task_create(sch, d, i_grimreaper, sch) < 0) {
+		free(d);
+		return -1;
+	}
+
+	sch->reaper = d;
+
+	idsched_task_submit(sch, d);
+
+	return 0;
+}
+
+static void i_waitqadd(iwaitq *wq, iwaitq_entry *we)
+{
+	pthread_mutex_lock(&wq->lck);
+
+	ilisti_push_back(&wq->head, &we->node);
+
+	pthread_mutex_unlock(&wq->lck);
+}
+
+static void i_waitqwakeone(iwaitq *wq)
+{
+	iwaitq_entry *we;
+	ilinode_t    *node;
+
+	pthread_mutex_lock(&wq->lck);
+
+	if (ilisti_empty(&wq->head)) {
+		pthread_mutex_unlock(&wq->lck);
+		return;
+	}
+
+	node = ilisti_front(&wq->head);
+	ilisti_remove(node);
+
+	pthread_mutex_unlock(&wq->lck);
+
+	we = ILISTI_ENTRY(node, iwaitq_entry, node);
+
+	we->task->flags = IDSCHED_TASK_READY;
+
+	pthread_mutex_lock(&we->task->core->lck);
+	pqueue_push(&we->task->core->rq, &we->task);
+	pthread_cond_signal(&we->task->core->cv);
+	pthread_mutex_unlock(&we->task->core->lck);
 }
 
 /* Main loop */
@@ -590,6 +688,47 @@ static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
 
 static void i_sys_wait(idsched_task_t *t)
 {
+	ilinode_t *pos;
+	ilinode_t *tmp;
+	idsched_task_t *chld;
+	int *status;
+
+	status = (int *)t->sc_arg[0];
+
+	for (;;) {
+		ILISTI_FOREACH_SAFE(pos, tmp, &t->children) {
+			chld = ILISTI_ENTRY(pos, idsched_task_t, sibling);
+
+			if (!(chld->flags & IDSCHED_TASK_DONE))
+				continue;
+
+			if (status != NULL)
+				*status = chld->exitst;
+
+			ilisti_remove(&chld->sibling);
+
+			/* TODO reap child */
+
+			t->sc_ret = 0;
+			return;
+		}
+
+		if (ilisti_empty(&t->children)) {
+			t->sc_ret = -1;
+			return;
+		}
+
+		ilisti_init(&t->wait.node);
+		i_waitqadd(&t->wait_chldexit, &t->wait);
+
+		t->flags  = IDSCHED_TASK_BLOCKED;
+		t->sc_ret = 0;
+		return;
+	}
+}
+
+static void i_sys_waittask(idsched_task_t *t)
+{
 	idsched_task_t *chld;
 	int            *status;
 	int             options;
@@ -609,10 +748,17 @@ static void i_sys_wait(idsched_task_t *t)
 		if (status != NULL)
 			*status = chld->exitst;
 
+		ilisti_remove(&chld->sibling);
+
+		/* TODO reap child */
+
 		t->sc_ret = 0;
 		return;
 	}
-	t->waitchld = chld;
+
+	ilisti_init(&t->wait.node);
+	i_waitqadd(&t->wait_chldexit, &t->wait);
+
 	t->flags = IDSCHED_TASK_BLOCKED;
 	t->sc_ret = 0;
 }
@@ -698,7 +844,20 @@ static void i_sys_fork(idsched_task_t *t)
 
 	chld->fn     = prnt->fn;
 	chld->arg    = prnt->arg;
+
+	ilisti_init(&chld->children);
+	ilisti_init(&chld->sibling);
+
+	chld->wait.task = chld;
+	ilisti_init(&chld->wait.node);
+
+	pthread_mutex_init(&chld->wait_chldexit.lck, NULL);
+	ilisti_init(&chld->wait_chldexit.head);
+
 	chld->prnt   = prnt;
+
+	ilisti_push_back(&prnt->children, &chld->sibling);
+
 	chld->core   = prnt->core;
 	chld->pred   = prnt->pred;
 	chld->prio   = prnt->prio;
@@ -759,18 +918,8 @@ static void i_sys_exit(idsched_task_t *t)
 	pthread_cond_broadcast(&t->cv);
 	pthread_mutex_unlock(&t->lck);
 
-	if (t->prnt != NULL &&
-	    (t->prnt->flags & IDSCHED_TASK_BLOCKED) &&
-	    t->prnt->waitchld == t) {
-		t->prnt->waitchld = NULL;
-		t->prnt->flags = IDSCHED_TASK_READY;
-
-		pthread_mutex_lock(&t->prnt->core->lck);
-		pqueue_push(&t->prnt->core->rq, &t->prnt);
-		pthread_cond_signal(&t->prnt->core->cv);
-		pthread_mutex_unlock(&t->prnt->core->lck);
-	}
-
+	if (t->prnt != NULL)
+		i_waitqwakeone(&t->prnt->wait_chldexit);
 	t->sc_ret = 0;
 }
 
@@ -845,6 +994,8 @@ int idsched_destroy(idsched_t *sched)
 	sched->ncores = 0;
 	sched->online = 0;
 	sched->nseq   = 0;
+
+	pthread_key_delete(i_core_key);
 
 	return 0;
 }
@@ -945,7 +1096,6 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->fn       = fn;
 	t->arg      = arg;
 	t->prnt     = NULL;
-	t->waitchld = NULL;
 	t->sched    = sch;
 	t->core     = NULL;
 	t->flags    = IDSCHED_TASK_NEW;
@@ -953,6 +1103,15 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->rt       = 0;
 	t->pred     = 0;
 	t->prio     = 0;
+
+	ilisti_init(&t->children);
+	ilisti_init(&t->sibling);
+
+	ilisti_init(&t->wait.node);
+	t->wait.task = t;
+
+	pthread_mutex_init(&t->wait_chldexit.lck, NULL);
+	ilisti_init(&t->wait_chldexit.head);
 
 	if (igetcontext(&t->ctx) != 0) {
 		free(t->ctx.ic_stack.ss_sp);
@@ -978,11 +1137,24 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 
 int idsched_task_destroy(idsched_task_t *t)
 {
-	if (t == NULL || idsched_task_wait(t, NULL) != 0)
+	if (t == NULL)
 		return -1;
+
+	pthread_mutex_lock(&t->lck);
+	if (!(t->flags & IDSCHED_TASK_DONE)) {
+		pthread_mutex_unlock(&t->lck);
+		return -1;
+	}
+
+	if (!ilisti_empty(&t->children)) {
+		pthread_mutex_unlock(&t->lck);
+		return -1;
+	}
+	pthread_mutex_unlock(&t->lck);
 
 	pthread_mutex_destroy(&t->lck);
 	pthread_cond_destroy(&t->cv);
+	pthread_mutex_destroy(&t->wait_chldexit.lck);
 
 	t->fn     = NULL;
 	t->arg    = NULL;
@@ -1057,8 +1229,23 @@ int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 	return 0;
 }
 
+int idsched_task_wait(int *wstatus)
+{
+	idsched_core_t *core;
+	idsched_task_t *curr;
 
-int idsched_task_wait(idsched_task_t *t, int *wstatus)
+	core = i_core_self();
+	if (core == NULL) return -1;
+
+	curr = core->currt;
+	if (curr == NULL) return -1;
+
+	curr->sc_arg[0] = (ilib_uintptr_t)wstatus;
+
+	return (int)i_schedcall(curr, IDSCHED_SYS_WAIT);
+}
+
+int idsched_task_waittask(idsched_task_t *t, int *wstatus)
 {
 	idsched_core_t *core;
 	idsched_task_t *curr;
@@ -1072,7 +1259,7 @@ int idsched_task_wait(idsched_task_t *t, int *wstatus)
 		curr->sc_arg[1] = (ilib_uintptr_t)wstatus;
 		curr->sc_arg[2] = 0;
 
-		return (int)i_schedcall(curr, IDSCHED_SYS_WAIT);
+		return (int)i_schedcall(curr, IDSCHED_SYS_WAITT);
 	}
 
 	pthread_mutex_lock(&t->lck);
@@ -1100,7 +1287,7 @@ int idsched_task_yield(void)
 	task = core->currt;
 	if (task == NULL) return -1;
 
-	return (int)i_schedcall(task, IDSCHED_SYS_YELD);
+	return (int)i_schedcall(task, IDSCHED_SYS_YIELD);
 }
 
 int idsched_task_exec(int (*fn)(void *), void *arg)
@@ -1133,7 +1320,16 @@ int idsched_run(idsched_t *sched)
 	if (sched == NULL) return -1;
 	pthread_setspecific(i_core_key, &sched->cores[0]);
 
+	if (i_create_reaper(sched) != 0) return -1;
+
 	i_core_run(&sched->cores[0]);
+
+	if (sched->reaper != NULL) {
+		idsched_task_destroy(sched->reaper);
+		free(sched->reaper);
+		sched->reaper = NULL;
+	}
+
 	return 0;
 }
 

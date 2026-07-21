@@ -18,16 +18,19 @@ static int printcounter(void *arg)
 
 static int forktask(void *arg)
 {
-	idsched_task_t *t = idsched_task_fork();
+	printf("Parent will fork 2^4\n");
 
-	if (t == NULL) {
-		idsched_task_exec(printcounter, NULL);
-		printf("error\n");
-	} else {
-		printf("parent now waits\n");
-		while(idsched_task_wait(t, NULL) == -1);
+	idsched_task_t *chld;
+	for (int i = 0; i < 4; ++i) {
+		chld = idsched_task_fork();
+		if (chld == NULL) {
+			printf("Child %d\n", i);
+		} else {
+			printf("Parent %d\n", i);
+		}
 	}
 
+	while(idsched_task_wait(NULL) != -1);
 	printf("Parent is done\n");
 	return 0;
 }
@@ -44,7 +47,7 @@ int main(void)
 	assert(idsched_task_create(&sched, &task, forktask, NULL) != IDSCHED_INVALID_TID);
 	assert(idsched_task_submit(&sched, &task) == 0);
 
-	assert(idsched_task_wait(&task, &status) == 0);
+	assert(idsched_task_waittask(&task, &status) == 0);
 	assert(status == 0);
 
 	assert(idsched_task_destroy(&task) == 0);

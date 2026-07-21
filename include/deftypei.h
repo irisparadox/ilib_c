@@ -32,4 +32,9 @@ typedef unsigned long  ilib_uintptr_t;
 #define ILIB_HIDDEN
 #endif /* defined(__GNUC__) || defined(__clang__) */
 
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+
+
 #endif /* DEFTYPEI_H */
