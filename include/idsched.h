@@ -91,6 +91,7 @@ struct i_pred_entry {
 typedef struct iwaitq_entry {
 	ilinode_t       node;
 	idsched_task_t *task;
+	idsched_task_t *target;
 } iwaitq_entry;
 
 typedef struct iwaitq {
@@ -438,31 +439,35 @@ static void i_waitqadd(iwaitq *wq, iwaitq_entry *we)
 	pthread_mutex_unlock(&wq->lck);
 }
 
-static void i_waitqwakeone(iwaitq *wq)
+static void i_waitqwakeone(iwaitq *wq, idsched_task_t *chld)
 {
 	iwaitq_entry *we;
-	ilinode_t    *node;
+	ilinode_t    *pos;
+	ilinode_t    *tmp;
 
 	pthread_mutex_lock(&wq->lck);
 
-	if (ilisti_empty(&wq->head)) {
+	ILISTI_FOREACH_SAFE(pos, tmp, &wq->head) {
+		we = ILISTI_ENTRY(pos, iwaitq_entry, node);
+
+		if (we->target != NULL && we->target != chld)
+			continue;
+
+		ilisti_remove(pos);
+
 		pthread_mutex_unlock(&wq->lck);
+
+		we->task->flags = IDSCHED_TASK_READY;
+
+		pthread_mutex_lock(&we->task->core->lck);
+		pqueue_push(&we->task->core->rq, &we->task);
+		pthread_cond_signal(&we->task->core->cv);
+		pthread_mutex_unlock(&we->task->core->lck);
+
 		return;
 	}
 
-	node = ilisti_front(&wq->head);
-	ilisti_remove(node);
-
 	pthread_mutex_unlock(&wq->lck);
-
-	we = ILISTI_ENTRY(node, iwaitq_entry, node);
-
-	we->task->flags = IDSCHED_TASK_READY;
-
-	pthread_mutex_lock(&we->task->core->lck);
-	pqueue_push(&we->task->core->rq, &we->task);
-	pthread_cond_signal(&we->task->core->cv);
-	pthread_mutex_unlock(&we->task->core->lck);
 }
 
 /* Main loop */
@@ -719,6 +724,9 @@ static void i_sys_wait(idsched_task_t *t)
 		}
 
 		ilisti_init(&t->wait.node);
+		t->wait.task   = t;
+		t->wait.target = NULL;
+
 		i_waitqadd(&t->wait_chldexit, &t->wait);
 
 		t->flags  = IDSCHED_TASK_BLOCKED;
@@ -757,6 +765,8 @@ static void i_sys_waittask(idsched_task_t *t)
 	}
 
 	ilisti_init(&t->wait.node);
+	t->wait.task   = t;
+	t->wait.target = chld;
 	i_waitqadd(&t->wait_chldexit, &t->wait);
 
 	t->flags = IDSCHED_TASK_BLOCKED;
@@ -919,7 +929,7 @@ static void i_sys_exit(idsched_task_t *t)
 	pthread_mutex_unlock(&t->lck);
 
 	if (t->prnt != NULL)
-		i_waitqwakeone(&t->prnt->wait_chldexit);
+		i_waitqwakeone(&t->prnt->wait_chldexit, t);
 	t->sc_ret = 0;
 }
 

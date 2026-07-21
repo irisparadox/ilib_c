@@ -25,6 +25,7 @@ static int forktask(void *arg)
 		chld = idsched_task_fork();
 		if (chld == NULL) {
 			printf("Child %d\n", i);
+			return 0;
 		} else {
 			printf("Parent %d\n", i);
 		}
@@ -51,6 +52,8 @@ int main(void)
 	assert(status == 0);
 
 	assert(idsched_task_destroy(&task) == 0);
+	assert(idsched_core_shutdown(&sched, 1) == 1);
+	assert(idsched_destroy(&sched) == 0);
 
 	printf("All tests passed\n");
 	return 0;
