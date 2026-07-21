@@ -30,6 +30,7 @@
 #define IDSCHED_TASK_RUNNING  (1u << 2)
 #define IDSCHED_TASK_DONE     (1u << 3)
 #define IDSCHED_TASK_BLOCKED  (1u << 4)
+#define IDSCHED_TASK_REAPED   (1u << 5)
 
 #define IDSCHED_ACPI_SIGARM   (1u << 0)
 #define IDSCHED_ACPI_SIGFRD   (1u << 1)
@@ -99,6 +100,19 @@ typedef struct iwaitq {
 	ilinode_t       head;
 } iwaitq;
 
+typedef struct ireaper {
+	pthread_t       thread;
+
+	pthread_mutex_t lck;
+	pthread_cond_t  cv;
+
+	ilinode_t       zombies;
+
+	idsched_t      *sched;
+
+	ilinode_t       poison;
+} ireaper;
+
 typedef ilib_uint64_t idsched_tid;
 
 struct idsched {
@@ -108,7 +122,7 @@ struct idsched {
 	ilib_uint64_t   nseq;
 	idsched_core_t *cores;
 
-	idsched_task_t *reaper;
+	ireaper         reaper;
 
 	ipred_t         gpred;
 
@@ -351,6 +365,12 @@ static void i_sys_wait(idsched_task_t *t);
 static void i_sys_waittask(idsched_task_t *t);
 static void i_sys_exit(idsched_task_t *t);
 
+static int             i_reaper_init(ireaper *r, idsched_t *sch);
+static void            i_reaper_destroy(ireaper *r);
+static void            i_reaper_enqueue(ireaper *r, idsched_task_t *t);
+static idsched_task_t *i_reaper_dequeue(ireaper *r);
+static void           *i_reaper_main(void *arg);
+
 static int i_dispatch_schedcall(idsched_task_t *t)
 {
 #if IDSCHED_DEBUG == 1
@@ -400,36 +420,6 @@ static long i_schedcall(idsched_task_t *t, int nr)
 	return i_core_self()->currt->sc_ret;
 }
 
-static int i_grimreaper(void *arg)
-{
-	(void)arg;
-
-	for (;;) {
-		idsched_task_yield();
-	}
-
-	return 0;
-}
-
-static int i_create_reaper(idsched_t *sch)
-{
-	idsched_task_t *d;
-
-	d = malloc(sizeof(idsched_task_t));
-	if (d == NULL) return -1;
-
-	if (idsched_task_create(sch, d, i_grimreaper, sch) < 0) {
-		free(d);
-		return -1;
-	}
-
-	sch->reaper = d;
-
-	idsched_task_submit(sch, d);
-
-	return 0;
-}
-
 static void i_waitqadd(iwaitq *wq, iwaitq_entry *we)
 {
 	pthread_mutex_lock(&wq->lck);
@@ -468,6 +458,123 @@ static void i_waitqwakeone(iwaitq *wq, idsched_task_t *chld)
 	}
 
 	pthread_mutex_unlock(&wq->lck);
+}
+
+static int i_reaper_init(ireaper *r, idsched_t *sch)
+{
+	r->sched = sch;
+
+	ilisti_init(&r->zombies);
+	ilisti_init(&r->poison);
+
+	pthread_mutex_init(&r->lck, NULL);
+	pthread_cond_init(&r->cv, NULL);
+
+	if (pthread_create(&r->thread, NULL, i_reaper_main, r) != 0) {
+		pthread_mutex_destroy(&r->lck);
+		pthread_cond_destroy(&r->cv);
+		return -1;
+	}
+
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper created successfully\n");
+	printf("[DEBUG_SCHED]: Reaper pointer %p\n", r);
+#endif
+
+	return 0;
+}
+
+static void i_reaper_destroy(ireaper *r)
+{
+	i_reaper_enqueue(r, NULL);
+
+	pthread_join(r->thread, NULL);
+
+	pthread_mutex_destroy(&r->lck);
+	pthread_cond_destroy(&r->cv);
+
+	r->sched = NULL;
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper destroyed successfully\n");
+#endif
+}
+
+static void i_reaper_enqueue(ireaper *r, idsched_task_t *t)
+{
+	ilinode_t *node;
+
+	/* The node we enqueue could be the poison pill to kill the
+           reaper which would mean shutdown.  */
+	if (t != NULL)
+		node = &t->sibling;
+	else
+		node = &r->poison;
+
+	pthread_mutex_lock(&r->lck);
+
+	/* Enqueue the task.  */
+	ilisti_push_back(&r->zombies, node);
+	pthread_cond_signal(&r->cv); /* Wake the reaper, time to die.  */
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper enqueued and signaled\n");
+	printf("[DEBUG_SCHED]: Node is %s\n", t ? "Task" : "Poison Pill");
+	printf("[DEBUG_SCHED]: Node pointer %p\n", t);
+#endif
+	pthread_mutex_unlock(&r->lck);
+}
+
+static idsched_task_t *i_reaper_dequeue(ireaper *r)
+{
+	pthread_mutex_lock(&r->lck);
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper dequeue in progress\n");
+#endif
+	while (ilisti_empty(&r->zombies))
+		pthread_cond_wait(&r->cv, &r->lck);
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper awoken to kill zombie\n");
+#endif
+	ilinode_t *zombn = ilisti_front(&r->zombies);
+	ilisti_remove(zombn);
+
+	pthread_mutex_unlock(&r->lck);
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper zombie pointer %p\n", zombn);
+#endif
+	if (zombn == &r->poison) return NULL;
+
+	idsched_task_t *t = ILISTI_ENTRY(zombn, idsched_task_t, sibling);
+	return t;
+}
+
+static void *i_reaper_main(void *arg)
+{
+	ireaper        *r;
+	idsched_task_t *t;
+
+	r = arg;
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper main loop start\n");
+#endif
+	for (;;) {
+		t = i_reaper_dequeue(r); /* This will return NULL if destruction.  */
+
+		/* Death can die too.  */
+		if (t == NULL) break;
+
+#if IDSCHED_DEBUG == 1
+		printf("[DEBUG_SCHED]: Reaper killing %p\n", t);
+#endif
+		idsched_task_destroy(t);
+		free(t);
+#if IDSCHED_DEBUG == 1
+		printf("[DEBUG_SCHED]: Reaper killed task\n");
+#endif
+	}
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: Reaper exiting\n");
+#endif
+	return NULL;
 }
 
 /* Main loop */
@@ -711,8 +818,8 @@ static void i_sys_wait(idsched_task_t *t)
 				*status = chld->exitst;
 
 			ilisti_remove(&chld->sibling);
-
-			/* TODO reap child */
+			chld->flags |= IDSCHED_TASK_REAPED;
+			i_reaper_enqueue(&t->sched->reaper, chld);
 
 			t->sc_ret = 0;
 			return;
@@ -757,8 +864,8 @@ static void i_sys_waittask(idsched_task_t *t)
 			*status = chld->exitst;
 
 		ilisti_remove(&chld->sibling);
-
-		/* TODO reap child */
+		chld->flags |= IDSCHED_TASK_REAPED;
+		i_reaper_enqueue(&t->sched->reaper, chld);
 
 		t->sc_ret = 0;
 		return;
@@ -971,6 +1078,7 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 	sched->cores[0].thread = pthread_self();
 
 	pthread_key_create(&i_core_key, NULL);
+	i_reaper_init(&sched->reaper, sched);
 
 	return 0;
 }
@@ -980,6 +1088,8 @@ int idsched_destroy(idsched_t *sched)
 	ilib_size_t i;
 
 	if (sched == NULL) return -1;
+
+	i_reaper_destroy(&sched->reaper);
 
 	int s = idsched_core_shutdown(sched, IDSCHED_ALL_CORES);
 
@@ -1330,15 +1440,7 @@ int idsched_run(idsched_t *sched)
 	if (sched == NULL) return -1;
 	pthread_setspecific(i_core_key, &sched->cores[0]);
 
-	if (i_create_reaper(sched) != 0) return -1;
-
 	i_core_run(&sched->cores[0]);
-
-	if (sched->reaper != NULL) {
-		idsched_task_destroy(sched->reaper);
-		free(sched->reaper);
-		sched->reaper = NULL;
-	}
 
 	return 0;
 }

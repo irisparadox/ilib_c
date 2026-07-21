@@ -18,8 +18,6 @@ static int printcounter(void *arg)
 
 static int forktask(void *arg)
 {
-	printf("Parent will fork 2^4\n");
-
 	idsched_task_t *chld;
 	for (int i = 0; i < 4; ++i) {
 		chld = idsched_task_fork();
