@@ -31,6 +31,7 @@
 #define IDSCHED_TASK_DONE     (1u << 3)
 #define IDSCHED_TASK_BLOCKED  (1u << 4)
 #define IDSCHED_TASK_REAPED   (1u << 5)
+#define IDSCHED_TASK_USROWN   (1u << 6)
 
 #define IDSCHED_ACPI_SIGARM   (1u << 0)
 #define IDSCHED_ACPI_SIGFRD   (1u << 1)
@@ -55,7 +56,7 @@
 #endif  /* IDSCHED_STCK_SIZE */
 
 #ifndef IDSCHED_DEBUG
-#define IDSCHED_DEBUG 0
+#define IDSCHED_DEBUG 1
 #endif  /* IDSCHED_DEBUG */
 
 #if IDSCHED_DEBUG == 1
@@ -107,6 +108,7 @@ typedef struct ireaper {
 	pthread_cond_t  cv;
 
 	ilinode_t       zombies;
+	ilinode_t       children;
 
 	idsched_t      *sched;
 
@@ -224,7 +226,7 @@ int idsched_run(idsched_t *sched);
 
 #endif /* IDSCHED_H_ */
 
-//#define IDSCHED_IMPLEMENTATION
+#define IDSCHED_IMPLEMENTATION
 #ifdef IDSCHED_IMPLEMENTATION
 #ifndef I_IDSCH_IMPL
 #define I_IDSCH_IMPL
@@ -252,6 +254,21 @@ int idsched_run(idsched_t *sched);
 #include <ilisti.h>
 
 #define I_ONEMALPHA (1.0f - IDSCHED_EMA_ALPHA)
+
+#define _I__TASK_HAS(t, f) (((t)->flags & (f)) != 0)
+#define _I__TASK_SET(t, f) ((t)->flags |= (f))
+#define _I__TASK_CLR(t, f) ((t)->flags &= ~(f))
+#define _I__TASK_TGL(t, f) ((t)->flags ^= (f))
+
+#define _I__TASK_MSTAT                                                  \
+	(IDSCHED_TASK_NEW | IDSCHED_TASK_READY | IDSCHED_TASK_RUNNING | \
+	IDSCHED_TASK_BLOCKED | IDSCHED_TASK_DONE)
+
+#define _I__TASK_STSTAT(t, s)                  \
+	do {                                   \
+		(t)->flags &= ~_I__TASK_MSTAT; \
+		(t)->flags |= (s);             \
+	} while (0)
 
 static pthread_key_t i_core_key;
 
@@ -365,16 +382,19 @@ static void i_sys_wait(idsched_task_t *t);
 static void i_sys_waittask(idsched_task_t *t);
 static void i_sys_exit(idsched_task_t *t);
 
+static void i_exit_notify(idsched_task_t *t);
+
 static int             i_reaper_init(ireaper *r, idsched_t *sch);
 static void            i_reaper_destroy(ireaper *r);
 static void            i_reaper_enqueue(ireaper *r, idsched_task_t *t);
 static idsched_task_t *i_reaper_dequeue(ireaper *r);
+static void            i_reaper_adopt(ireaper *r, idsched_task_t *t);
 static void           *i_reaper_main(void *arg);
 
 static int i_dispatch_schedcall(idsched_task_t *t)
 {
 #if IDSCHED_DEBUG == 1
-	printf("dispatch %d for tid=%zu\n", t->sc_nr, t->tid);
+	printf("[DEBUG_SCHED]: SCHEDCALL dispatch %d for tid=%zu\n", t->sc_nr, t->tid);
 #endif
 	switch(t->sc_nr) {
 	case IDSCHED_SYS_FORK:
@@ -393,7 +413,7 @@ static int i_dispatch_schedcall(idsched_task_t *t)
 		else
 			i_sys_waittask(t);
 
-		if (t->flags & IDSCHED_TASK_BLOCKED)
+		if (_I__TASK_HAS(t, IDSCHED_TASK_BLOCKED))
 			return IDSCHED_DISPATCH_STOP;
 
 		return IDSCHED_DISPATCH_CONTINUE;
@@ -408,8 +428,8 @@ static int i_dispatch_schedcall(idsched_task_t *t)
 static long i_schedcall(idsched_task_t *t, int nr)
 {
 #if IDSCHED_DEBUG == 1
-	printf("schedcall tid=%zu nr=%d\n", t->tid, nr);
-	printf("schedcall arg t=%p currt=%p\n",
+	printf("[DEBUG_SCHED]: SCHEDCALL entry tid=%zu nr=%d\n", t->tid, nr);
+	printf("[DEBUG_SCHED]: SCHEDCALL arg t=%p currt=%p\n",
 		(void *)t,
 	       (void *)i_core_self()->currt);
 #endif
@@ -447,7 +467,7 @@ static void i_waitqwakeone(iwaitq *wq, idsched_task_t *chld)
 
 		pthread_mutex_unlock(&wq->lck);
 
-		we->task->flags = IDSCHED_TASK_READY;
+		_I__TASK_STSTAT(we->task, IDSCHED_TASK_READY);
 
 		pthread_mutex_lock(&we->task->core->lck);
 		pqueue_push(&we->task->core->rq, &we->task);
@@ -466,6 +486,7 @@ static int i_reaper_init(ireaper *r, idsched_t *sch)
 
 	ilisti_init(&r->zombies);
 	ilisti_init(&r->poison);
+	ilisti_init(&r->children);
 
 	pthread_mutex_init(&r->lck, NULL);
 	pthread_cond_init(&r->cv, NULL);
@@ -516,9 +537,9 @@ static void i_reaper_enqueue(ireaper *r, idsched_task_t *t)
 	ilisti_push_back(&r->zombies, node);
 	pthread_cond_signal(&r->cv); /* Wake the reaper, time to die.  */
 #if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: Reaper enqueued and signaled\n");
-	printf("[DEBUG_SCHED]: Node is %s\n", t ? "Task" : "Poison Pill");
-	printf("[DEBUG_SCHED]: Node pointer %p\n", t);
+	printf("[DEBUG_SCHED]: REAPER enqueued and signaled\n");
+	printf("[DEBUG_SCHED]: REAPER node is %s\n", t ? "Task" : "Poison Pill");
+	printf("[DEBUG_SCHED]: REAPER node pointer %p\n", t);
 #endif
 	pthread_mutex_unlock(&r->lck);
 }
@@ -527,24 +548,37 @@ static idsched_task_t *i_reaper_dequeue(ireaper *r)
 {
 	pthread_mutex_lock(&r->lck);
 #if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: Reaper dequeue in progress\n");
+	printf("[DEBUG_SCHED]: REAPER dequeue in progress\n");
 #endif
 	while (ilisti_empty(&r->zombies))
 		pthread_cond_wait(&r->cv, &r->lck);
 #if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: Reaper awoken to kill zombie\n");
+	printf("[DEBUG_SCHED]: REAPER awoken to kill zombie\n");
 #endif
 	ilinode_t *zombn = ilisti_front(&r->zombies);
 	ilisti_remove(zombn);
 
 	pthread_mutex_unlock(&r->lck);
 #if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: Reaper zombie pointer %p\n", zombn);
+	printf("[DEBUG_SCHED]: REAPER zombie pointer %p\n", zombn);
 #endif
 	if (zombn == &r->poison) return NULL;
 
 	idsched_task_t *t = ILISTI_ENTRY(zombn, idsched_task_t, sibling);
 	return t;
+}
+
+static void i_reaper_adopt(ireaper *r, idsched_task_t *t)
+{
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: REAPER adopting children %p\n", t);
+#endif
+	ilisti_remove(&t->sibling);
+	t->prnt = NULL;
+	ilisti_push_back(&r->children, &t->sibling);
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: REAPER task %p was adopted!\n", t);
+#endif
 }
 
 static void *i_reaper_main(void *arg)
@@ -554,7 +588,7 @@ static void *i_reaper_main(void *arg)
 
 	r = arg;
 #if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: Reaper main loop start\n");
+	printf("[DEBUG_SCHED]: REAPER main loop start\n");
 #endif
 	for (;;) {
 		t = i_reaper_dequeue(r); /* This will return NULL if destruction.  */
@@ -563,16 +597,16 @@ static void *i_reaper_main(void *arg)
 		if (t == NULL) break;
 
 #if IDSCHED_DEBUG == 1
-		printf("[DEBUG_SCHED]: Reaper killing %p\n", t);
+		printf("[DEBUG_SCHED]: REAPER killing %p\n", t);
 #endif
 		idsched_task_destroy(t);
 		free(t);
 #if IDSCHED_DEBUG == 1
-		printf("[DEBUG_SCHED]: Reaper killed task\n");
+		printf("[DEBUG_SCHED]: REAPER killed task\n");
 #endif
 	}
 #if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: Reaper exiting\n");
+	printf("[DEBUG_SCHED]: REAPER exiting\n");
 #endif
 	return NULL;
 }
@@ -597,7 +631,7 @@ static void i_core_run(idsched_core_t *core)
 #endif
 
 		pthread_mutex_lock(&t->lck);
-		t->flags    = IDSCHED_TASK_RUNNING;
+		_I__TASK_STSTAT(t, IDSCHED_TASK_RUNNING);
 		pthread_mutex_unlock(&t->lck);
 		core->currt = t;
 
@@ -605,10 +639,10 @@ static void i_core_run(idsched_core_t *core)
 
 		for (;;) {
 #if IDSCHED_DEBUG == 1
-			printf("RIP=%p\n",
+			printf("[ÐEBUG_SCHED]: SCHEDCTX RIP=%p\n",
 				(void *)t->ctx.ic_mcontext.gregs[IMREG_RIP]);
 
-			printf("RSP=%p\n",
+			printf("[ÐEBUG_SCHED]: SCHEDCTX RSP=%p\n",
 				(void *)t->ctx.ic_mcontext.gregs[IMREG_RSP]);
 #endif
 			iswapcontext(&core->shctx, &t->ctx);
@@ -635,7 +669,7 @@ static void i_core_run(idsched_core_t *core)
 		pthread_mutex_lock(&core->lck);
 		pthread_mutex_lock(&t->lck);
 
-		if (t->flags & IDSCHED_TASK_READY)
+		if (_I__TASK_HAS(t, IDSCHED_TASK_READY))
 			pqueue_push(&core->rq, &t);
 
 		pthread_mutex_unlock(&t->lck);
@@ -811,14 +845,14 @@ static void i_sys_wait(idsched_task_t *t)
 		ILISTI_FOREACH_SAFE(pos, tmp, &t->children) {
 			chld = ILISTI_ENTRY(pos, idsched_task_t, sibling);
 
-			if (!(chld->flags & IDSCHED_TASK_DONE))
+			if (!(_I__TASK_HAS(chld, IDSCHED_TASK_DONE)))
 				continue;
 
 			if (status != NULL)
 				*status = chld->exitst;
 
 			ilisti_remove(&chld->sibling);
-			chld->flags |= IDSCHED_TASK_REAPED;
+			_I__TASK_SET(chld, IDSCHED_TASK_REAPED);
 			i_reaper_enqueue(&t->sched->reaper, chld);
 
 			t->sc_ret = 0;
@@ -836,7 +870,7 @@ static void i_sys_wait(idsched_task_t *t)
 
 		i_waitqadd(&t->wait_chldexit, &t->wait);
 
-		t->flags  = IDSCHED_TASK_BLOCKED;
+		_I__TASK_STSTAT(t, IDSCHED_TASK_BLOCKED);
 		t->sc_ret = 0;
 		return;
 	}
@@ -859,12 +893,12 @@ static void i_sys_waittask(idsched_task_t *t)
 		return;
 	}
 
-	if (chld->flags & IDSCHED_TASK_DONE) {
+	if (_I__TASK_HAS(chld, IDSCHED_TASK_DONE)) {
 		if (status != NULL)
 			*status = chld->exitst;
 
 		ilisti_remove(&chld->sibling);
-		chld->flags |= IDSCHED_TASK_REAPED;
+		_I__TASK_SET(chld, IDSCHED_TASK_REAPED);
 		i_reaper_enqueue(&t->sched->reaper, chld);
 
 		t->sc_ret = 0;
@@ -876,7 +910,7 @@ static void i_sys_waittask(idsched_task_t *t)
 	t->wait.target = chld;
 	i_waitqadd(&t->wait_chldexit, &t->wait);
 
-	t->flags = IDSCHED_TASK_BLOCKED;
+	_I__TASK_STSTAT(t, IDSCHED_TASK_BLOCKED);
 	t->sc_ret = 0;
 }
 
@@ -981,7 +1015,7 @@ static void i_sys_fork(idsched_task_t *t)
 	chld->sched  = prnt->sched;
 	chld->exitst = 0;
 	chld->rt     = 0;
-	chld->flags  = IDSCHED_TASK_READY;
+	_I__TASK_STSTAT(chld, IDSCHED_TASK_READY);
 	chld->ctx.ic_link = &core->shctx;
 
 	chld->sc_nr  = IDSCHED_SYS_NONE;
@@ -1013,23 +1047,35 @@ static void i_sys_exec(idsched_task_t *t)
 static void i_sys_yield(idsched_task_t *t)
 {
 	pthread_mutex_lock(&t->lck);
-	t->flags = IDSCHED_TASK_READY;
+	_I__TASK_STSTAT(t, IDSCHED_TASK_READY);
 	pthread_mutex_unlock(&t->lck);
 
 	t->sc_ret = 0;
 }
 
-static void i_sys_exit(idsched_task_t *t)
+static void i_exit_reparent(idsched_task_t *prnt)
 {
 #if IDSCHED_DEBUG == 1
-	printf("EXIT syscall tid=%zu\n", t->tid);
+	printf("[DEBUG_SCHED]: EXIT reparenting\n");
 #endif
-	int status;
+	ilinode_t      *pos;
+	ilinode_t      *tmp;
+	idsched_task_t *chld;
 
-	status = (int)t->sc_arg[0];
+	ILISTI_FOREACH_SAFE(pos, tmp, &prnt->children) {
+		chld = ILISTI_ENTRY(pos, idsched_task_t, sibling);
 
-	t->exitst = status;
-	t->flags  = IDSCHED_TASK_DONE;
+		i_reaper_adopt(&prnt->sched->reaper, chld);
+	}
+}
+
+static void i_exit_notify(idsched_task_t *t)
+{
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: EXIT notify\n");
+#endif
+	_I__TASK_STSTAT(t, IDSCHED_TASK_DONE);
+	i_exit_reparent(t);
 
 	pthread_mutex_lock(&t->lck);
 	pthread_cond_broadcast(&t->cv);
@@ -1037,6 +1083,21 @@ static void i_sys_exit(idsched_task_t *t)
 
 	if (t->prnt != NULL)
 		i_waitqwakeone(&t->prnt->wait_chldexit, t);
+	else if (!(_I__TASK_HAS(t, IDSCHED_TASK_USROWN)))
+		i_reaper_enqueue(&t->sched->reaper, t);
+}
+
+static void i_sys_exit(idsched_task_t *t)
+{
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: EXIT syscall tid=%zu\n", t->tid);
+#endif
+	int status;
+
+	status = (int)t->sc_arg[0];
+
+	t->exitst = status;
+	i_exit_notify(t);
 	t->sc_ret = 0;
 }
 
@@ -1130,7 +1191,9 @@ int idsched_core_startup(idsched_t *sched, ilib_size_t n)
 	ilib_size_t     started;
 
 	if (sched == NULL || !i_is_bst_core(sched)) return -1;
-
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: BOOTSTRAP requested core startup of %zu cores\n", n);
+#endif
 	pthread_mutex_lock(&sched->lck);
 
 	offline = i_cntr_flag(sched, IDSCHED_CORE_OFFLINE);
@@ -1152,7 +1215,9 @@ int idsched_core_startup(idsched_t *sched, ilib_size_t n)
 		if (pthread_create(&core->thread, NULL, i_core_worker, core) != 0) {
 			continue;
 		}
-
+#if IDSCHED_DEBUG == 1
+		printf("[DEBUG_SCHED]: BOOTSTRAP awaken Worker Core [%zu]%p", i, core);
+#endif
 		++sched->online;
 		++started;
 	}
@@ -1169,12 +1234,23 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 	ilib_size_t     stopped;
 
 	if (sched == NULL || !i_is_bst_core(sched)) return -1;
-
+#if IDSCHED_DEBUG == 1
+	if (n == IDSCHED_ALL_CORES)
+		printf("[DEBUG_SCHED]: BOOTSTRAP requested shutdown of all cores\n");
+	else
+		printf("[DEBUG_SCHED]: BOOTSTRAP requested shutdown of %zu cores\n", n);
+#endif
 	pthread_mutex_lock(&sched->lck);
 	online = sched->online;
 
 	if (n == IDSCHED_ALL_CORES || n > online)
 		n = online;
+#if IDSCHED_DEBUG == 1
+	if (online <= 0)
+		printf("[DEBUG_SCHED]: BOOTSTRAP no online cores available\n");
+	else
+		printf("[DEBUG_SCHED]: BOOTSTRAP will shutdown %zu cores\n", n);
+#endif
 
 	pthread_mutex_unlock(&sched->lck);
 	stopped = 0;
@@ -1182,6 +1258,9 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 	while (stopped < n) {
 		pthread_mutex_lock(&sched->lck);
 		core = i_core_shtdwn_n(sched);
+#if IDSCHED_DEBUG == 1
+		printf("[DEBUG_SCHED]: Shutdown to core %p\n", core);
+#endif
 
 		if (core == NULL) {
 			pthread_mutex_unlock(&sched->lck);
@@ -1193,14 +1272,21 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 		pthread_mutex_lock(&core->lck);
 		pthread_cond_signal(&core->cv);
 		pthread_mutex_unlock(&core->lck);
-
+#if IDSCHED_DEBUG == 1
+		printf("        -   Worker Core %p\n", core);
+		printf("        -   thread %zu waiting for join()\n", core->thread);
+#endif
 		pthread_join(core->thread, NULL);
-
+#if IDSCHED_DEBUG == 1
+		printf("        [X] Worker Core %p joined\n", core);
+#endif
 		pthread_mutex_lock(&sched->lck);
 		core->flags = IDSCHED_CORE_OFFLINE;
 		--sched->online;
 		pthread_mutex_unlock(&sched->lck);
-
+#if IDSCHED_DEBUG == 1
+		printf("        [X] Worker Core %p shutdown\n", core);
+#endif
 		++stopped;
 	}
 
@@ -1218,7 +1304,8 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->prnt     = NULL;
 	t->sched    = sch;
 	t->core     = NULL;
-	t->flags    = IDSCHED_TASK_NEW;
+	_I__TASK_STSTAT(t, IDSCHED_TASK_NEW);
+	_I__TASK_SET(t, IDSCHED_TASK_USROWN);
 	t->exitst   = 0;
 	t->rt       = 0;
 	t->pred     = 0;
@@ -1261,7 +1348,7 @@ int idsched_task_destroy(idsched_task_t *t)
 		return -1;
 
 	pthread_mutex_lock(&t->lck);
-	if (!(t->flags & IDSCHED_TASK_DONE)) {
+	if (!(_I__TASK_HAS(t, IDSCHED_TASK_DONE))) {
 		pthread_mutex_unlock(&t->lck);
 		return -1;
 	}
@@ -1280,7 +1367,7 @@ int idsched_task_destroy(idsched_task_t *t)
 	t->arg    = NULL;
 	t->sched  = NULL;
 	t->core   = NULL;
-	t->flags  = IDSCHED_TASK_NEW;
+	_I__TASK_STSTAT(t, IDSCHED_TASK_NEW);
 	t->tid    = 0;
 	t->exitst = 0;
 
@@ -1297,7 +1384,7 @@ int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 	ilib_size_t     i, target, seen;
 
 	if (sch == NULL || t == NULL) return -1;
-	if (!(t->flags & IDSCHED_TASK_NEW)) return -1;
+	if (!(_I__TASK_HAS(t, IDSCHED_TASK_NEW))) return -1;
 
 	pthread_mutex_lock(&sch->lck);
 
@@ -1334,7 +1421,7 @@ int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 
 	t->prio  = t->pred;
 	t->core  = core;
-	t->flags = IDSCHED_TASK_READY;
+	_I__TASK_STSTAT(t, IDSCHED_TASK_READY);
 
 	t->ctx.ic_link = &core->shctx;
 
@@ -1384,7 +1471,7 @@ int idsched_task_waittask(idsched_task_t *t, int *wstatus)
 
 	pthread_mutex_lock(&t->lck);
 
-	while (!(t->flags & IDSCHED_TASK_DONE))
+	while (!(_I__TASK_HAS(t, IDSCHED_TASK_DONE)))
 		pthread_cond_wait(&t->cv, &t->lck);
 
 	if (wstatus != NULL)
