@@ -243,7 +243,7 @@ int idsched_run(idsched_t *sched);
 
 #endif /* IDSCHED_H_ */
 
-#define IDSCHED_IMPLEMENTATION
+//#define IDSCHED_IMPLEMENTATION
 #ifdef IDSCHED_IMPLEMENTATION
 #ifndef I_IDSCH_IMPL
 #define I_IDSCH_IMPL
