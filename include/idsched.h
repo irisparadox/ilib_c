@@ -90,12 +90,20 @@ struct i_pred_entry {
 	ilib_uint64_t nsa;
 };
 
-
 typedef struct iwaitq_entry {
 	ilinode_t       node;
 	idsched_task_t *task;
 	idsched_task_t *target;
 } iwaitq_entry;
+
+struct iwait_opts {
+	idsched_task_t *wo_target;
+	int             wo_stat;
+	int             wo_flags;
+
+	struct iwaitq_entry wait;
+	int             notask_error;
+};
 
 typedef struct iwaitq {
 	pthread_mutex_t lck;
@@ -206,7 +214,12 @@ struct idsched_task {
 #define IDSCHED_SYS_WAIT  3
 #define IDSCHED_SYS_EXIT  4
 #define IDSCHED_SYS_EXEC  5
-#define IDSCHED_SYS_WAITT 6
+#define IDSCHED_SYS_WAIT4 6
+
+#define ISC_WECHILD -1
+#define ISC_WNOWAIT  0
+#define ISC_WSUCCSS  1
+#define ISC_WREAPED  2
 
 #define IDSCHED_DISPATCH_CONTINUE 0
 #define IDSCHED_DISPATCH_STOP     1
@@ -305,53 +318,61 @@ static int i_task_cmp(const void *a, const void *b)
 /* ---------------- PRIVATE METHODS ---------------- */
 
 #if defined(__x86_64__)
-static void i_fix_frame_chain(const idsched_task_t *prnt, idsched_task_t *chld)
+static void i_fix_frame_chain(const stack_t *old_stack, const stack_t *new_stack, icontext_t *new_ctx)
 {
-	ilib_uintptr_t plow;
-	ilib_uintptr_t phigh;
-	ilib_uintptr_t clow;
+	ilib_uintptr_t old_low;
+	ilib_uintptr_t old_high;
+	ilib_uintptr_t new_low;
 	imreg_t       *rbp;
 	imreg_t        saved;
 	ilib_uintptr_t off;
 
-	plow  = (ilib_uintptr_t)prnt->ctx.ic_stack.ss_sp;
-	phigh = plow + prnt->ctx.ic_stack.ss_size;
-	clow  = (ilib_uintptr_t)chld->ctx.ic_stack.ss_sp;
+	old_low  = (ilib_uintptr_t)old_stack->ss_sp;
+	old_high = old_low + old_stack->ss_size;
+	new_low  = (ilib_uintptr_t)new_stack->ss_sp;
 
-	rbp = (imreg_t *)chld->ctx.ic_mcontext.gregs[IMREG_RBP];
+	rbp = (imreg_t *)new_ctx->ic_mcontext.gregs[IMREG_RBP];
 
 	while (1) {
-		if ((ilib_uintptr_t)rbp < clow ||
-		    (ilib_uintptr_t)rbp >= clow + chld->ctx.ic_stack.ss_size)
+		if ((ilib_uintptr_t)rbp < new_low ||
+		    (ilib_uintptr_t)rbp >= new_low + new_stack->ss_size)
 			break;
 
 		saved = *rbp;
 
-		if ((ilib_uintptr_t)saved < plow ||
-		    (ilib_uintptr_t)saved >= phigh)
+		if ((ilib_uintptr_t)saved < old_low ||
+		    (ilib_uintptr_t)saved >= old_high)
 			break;
 
-		off  = (ilib_uintptr_t)saved - plow;
-		*rbp = (imreg_t)(clow + off);
-		rbp  = (imreg_t *)*rbp;
+		off  = (ilib_uintptr_t)saved - old_low;
+		*rbp = (imreg_t)(new_low + off);
+
+#if IDSCHED_DEBUG == 1
+		printf("fix_frame_chain: rbp %p -> %p\n",
+			(void *)saved,
+			(void *)*rbp);
+#endif
+
+		rbp = (imreg_t *)*rbp;
 	}
 }
 
-static void i_relocate_stack(idsched_task_t *prnt, idsched_task_t *chld)
+static void i_relocate_stack(const idsched_task_t *old_task, idsched_task_t *new_task,
+			     const stack_t *old_stack, stack_t *new_stack)
 {
 	ilib_uintptr_t old_base;
 	ilib_uintptr_t new_base;
 	ilib_intptr_t delta;
 
-	old_base = (ilib_uintptr_t)prnt->ctx.ic_stack.ss_sp;
-	new_base = (ilib_uintptr_t)chld->ctx.ic_stack.ss_sp;
+	old_base = (ilib_uintptr_t)old_stack->ss_sp;
+	new_base = (ilib_uintptr_t)new_stack->ss_sp;
 
 	delta = (ilib_intptr_t)(new_base - old_base);
 
 	ilib_uintptr_t *ptr = (ilib_uintptr_t *)new_base;
 
 	ilib_size_t words =
-		chld->ctx.ic_stack.ss_size / sizeof(ilib_uintptr_t);
+		new_stack->ss_size / sizeof(ilib_uintptr_t);
 
 	for (ilib_size_t i = 0; i < words; ++i, ++ptr) {
 		ilib_uintptr_t val = *ptr;
@@ -360,7 +381,7 @@ static void i_relocate_stack(idsched_task_t *prnt, idsched_task_t *chld)
 		 * Pointer into parent's stack.
 		 */
 		if (val >= old_base &&
-		    val < old_base + prnt->ctx.ic_stack.ss_size) {
+		    val < old_base + old_stack->ss_size) {
 			*ptr = (ilib_uintptr_t)((ilib_intptr_t)val + delta);
 			continue;
 		}
@@ -368,10 +389,12 @@ static void i_relocate_stack(idsched_task_t *prnt, idsched_task_t *chld)
 		/*
 		 * Fix task self references.
 		 */
-		if (val == (ilib_uintptr_t)prnt) {
-			*ptr = (ilib_uintptr_t)chld;
+		if (val == (ilib_uintptr_t)old_task) {
+			*ptr = (ilib_uintptr_t)new_task;
 #if IDSCHED_DEBUG == 1
-			printf("relocate_stack: fix task self references with val %p -> %p\n", (void *)val, (void *)chld);
+			printf("relocate_stack: fix task self references with val %p -> %p\n",
+				(void *)val,
+				(void *)new_task);
 #endif
 		}
 	}
@@ -379,12 +402,12 @@ static void i_relocate_stack(idsched_task_t *prnt, idsched_task_t *chld)
 #endif /* defined(__x86_64__) */
 
 /* SCHEDULER-SPACE & SYSCALLS */
-static void i_sys_fork(idsched_task_t *t);
-static void i_sys_exec(idsched_task_t *t);
-static void i_sys_yield(idsched_task_t *t);
-static void i_sys_wait(idsched_task_t *t);
-static void i_sys_waittask(idsched_task_t *t);
-static void i_sys_exit(idsched_task_t *t);
+static long i_sys_fork(idsched_task_t *t);
+static long i_sys_exec(idsched_task_t *t);
+static long i_sys_yield(idsched_task_t *t);
+static long i_sys_wait(idsched_task_t *t);
+static long i_sys_wait4(idsched_task_t *t);
+static long i_sys_exit(idsched_task_t *t);
 
 static void i_exit_notify(idsched_task_t *t);
 
@@ -395,12 +418,18 @@ static idsched_task_t *i_reaper_dequeue(ireaper *r);
 static void            i_reaper_adopt(ireaper *r, idsched_task_t *t);
 static void           *i_reaper_main(void *arg);
 
+static void i_schedule(void);
+static void i__schedule_loop(idsched_core_t *core);
+static void i__schedule(idsched_core_t *core, idsched_task_t *prev);
 static void i_sched_entry(idsched_task_t *t);
 static void i_task_entry(idsched_task_t *t);
 
-static int idle_swapper_loop()
+
+static int idle_swapper_loop(void)
 {
-	return 0;
+	do {
+		idsched_task_yield();
+	} while (1);
 }
 
 static int i_dispatch_schedcall(idsched_task_t *t)
@@ -408,32 +437,45 @@ static int i_dispatch_schedcall(idsched_task_t *t)
 #if IDSCHED_DEBUG == 1
 	printf("[DEBUG_SCHED]: SCHEDCALL dispatch %d for tid=%zu\n", t->sc_nr, t->tid);
 #endif
-	switch(t->sc_nr) {
+	switch (t->sc_nr) {
+	case IDSCHED_SYS_NONE:
+		return IDSCHED_DISPATCH_CONTINUE;
 	case IDSCHED_SYS_FORK:
 		i_sys_fork(t);
 		return IDSCHED_DISPATCH_CONTINUE;
+
 	case IDSCHED_SYS_EXEC:
 		i_sys_exec(t);
 		return IDSCHED_DISPATCH_STOP;
+
 	case IDSCHED_SYS_YIELD:
 		i_sys_yield(t);
 		return IDSCHED_DISPATCH_STOP;
+
 	case IDSCHED_SYS_WAIT:
-	case IDSCHED_SYS_WAITT:
-		if (t->sc_nr == IDSCHED_SYS_WAIT)
-			i_sys_wait(t);
-		else
-			i_sys_waittask(t);
+		i_sys_wait(t);
 
 		if (_I__TASK_HAS(t, IDSCHED_TASK_BLOCKED))
 			return IDSCHED_DISPATCH_STOP;
 
 		return IDSCHED_DISPATCH_CONTINUE;
+
+	case IDSCHED_SYS_WAIT4:
+		i_sys_wait4(t);
+
+		if (_I__TASK_HAS(t, IDSCHED_TASK_BLOCKED))
+			return IDSCHED_DISPATCH_STOP;
+
+		return IDSCHED_DISPATCH_CONTINUE;
+
 	case IDSCHED_SYS_EXIT:
 		i_sys_exit(t);
 		return IDSCHED_DISPATCH_STOP;
 	default:
-		return IDSCHED_DISPATCH_CONTINUE;
+#if IDSCHED_DEBUG == 1
+		printf("[DEBUG_SCHED]: SCHEDCALL Dispatch unknown nr %d", t->sc_nr);
+#endif
+		return IDSCHED_DISPATCH_STOP;
 	}
 }
 
@@ -449,7 +491,7 @@ static long i_schedcall(idsched_task_t *t, int nr)
 
 	iswapcontext(&t->ctx, &t->shctx);
 
-	return i_core_self()->currt->sc_ret;
+	return t->sc_ret;
 }
 
 static void i_waitqadd(iwaitq *wq, iwaitq_entry *we)
@@ -457,6 +499,15 @@ static void i_waitqadd(iwaitq *wq, iwaitq_entry *we)
 	pthread_mutex_lock(&wq->lck);
 
 	ilisti_push_back(&wq->head, &we->node);
+
+	pthread_mutex_unlock(&wq->lck);
+}
+
+static void i_waitqremove(iwaitq *wq, iwaitq_entry *we)
+{
+	pthread_mutex_lock(&wq->lck);
+
+	ilisti_remove(&we->node);
 
 	pthread_mutex_unlock(&wq->lck);
 }
@@ -624,6 +675,59 @@ static void *i_reaper_main(void *arg)
 }
 
 /* Main loop */
+
+static void i__schedule(idsched_core_t *core, idsched_task_t *prev)
+{
+	pthread_mutex_lock(&core->lck);
+	pthread_mutex_lock(&prev->lck);
+
+	if (_I__TASK_HAS(prev, IDSCHED_TASK_READY))
+		pqueue_push(&core->rq, &prev);
+
+	pthread_mutex_unlock(&prev->lck);
+
+	idsched_task_t *next;
+	if (pqueue_empty(&core->rq)) {
+		next = core->idle;
+		goto idle;
+	} else {
+		next = pqueue_top(&core->rq, idsched_task_t *);
+		pqueue_pop(&core->rq);
+		goto picked;
+	}
+
+ idle:
+	/* idle handling */
+	if (core->flags & IDSCHED_CORE_STOPPING) {
+		pthread_mutex_unlock(&core->lck);
+		isetcontext(&core->bootctx);
+		abort(); /* unreachable */
+	}
+
+	goto picked;
+ picked:
+	core->currt = next;
+	_I__TASK_STSTAT(next, IDSCHED_TASK_RUNNING);
+	pthread_mutex_unlock(&core->lck);
+
+	isetcontext(&next->shctx);
+
+	/* unreachable, panic */
+	abort();
+}
+
+static void i__schedule_loop(idsched_core_t *core)
+{
+	do {
+		i__schedule(core, core->currt);
+	} while (0);
+}
+
+static inline void i_schedule(void)
+{
+	i__schedule_loop(i_core_self());
+}
+
 static void i_core_run(idsched_core_t *core)
 {
 	idsched_task_t idle;
@@ -738,32 +842,18 @@ static void *i_core_worker(void *arg)
 
 static void i_sched_entry(idsched_task_t *t)
 {
-	idsched_core_t *core = t->core;
-
 	for (;;) {
-#if IDSCHED_DEBUG == 1
-		printf("[ÐEBUG_SCHED]: SCHEDCTX RIP=%p\n",
-			(void *)t->ctx.ic_mcontext.gregs[IMREG_RIP]);
-
-		printf("[ÐEBUG_SCHED]: SCHEDCTX RSP=%p\n",
-			(void *)t->ctx.ic_mcontext.gregs[IMREG_RSP]);
-#endif
 		iswapcontext(&t->shctx, &t->ctx);
-#if IDSCHED_DEBUG == 1
-		printf("scheduler: returned from tid=%zu\n", t->tid);
-		printf("sc_nr=%d flags=%x\n", t->sc_nr, t->flags);
-#endif
-		if (t->sc_nr == IDSCHED_SYS_NONE)
-			break;
 
-		switch(i_dispatch_schedcall(t)) {
+		switch (i_dispatch_schedcall(t)) {
 		case IDSCHED_DISPATCH_CONTINUE:
 			t->sc_nr = IDSCHED_SYS_NONE;
 			continue;
 		case IDSCHED_DISPATCH_STOP:
 		default:
 			t->sc_nr = IDSCHED_SYS_NONE;
-			return;
+			i_schedule();
+			break;
 		}
 	}
 }
@@ -902,96 +992,154 @@ static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
 
 /* SYSCALL IMPLEMENTATIONS */
 
-static void i_sys_wait(idsched_task_t *t)
+static long i_wait_consider_task(struct iwait_opts *wo)
 {
-	ilinode_t *pos;
-	ilinode_t *tmp;
-	idsched_task_t *chld;
-	int *status;
+	int retval;
+	if (_I__TASK_HAS(wo->wo_target, IDSCHED_TASK_DONE)) {
+		wo->wo_stat = wo->wo_target->exitst;
 
-	status = (int *)t->sc_arg[0];
+		ilisti_remove(&wo->wo_target->sibling);
+		_I__TASK_SET(wo->wo_target, IDSCHED_TASK_REAPED);
+		i_reaper_enqueue(&wo->wait.task->sched->reaper, wo->wo_target);
 
-	for (;;) {
-		ILISTI_FOREACH_SAFE(pos, tmp, &t->children) {
+		retval = ISC_WREAPED;
+		return retval;
+	}
+
+	retval = ISC_WNOWAIT;
+	return retval;
+}
+
+static long i_do_wait_task(struct iwait_opts *wo)
+{
+	if (wo->wo_target == NULL || wo->wo_target->prnt != wo->wait.task)
+		return ISC_WECHILD;
+
+	return i_wait_consider_task(wo);
+}
+
+long i__do_wait(struct iwait_opts *wo)
+{
+	long retval;
+	idsched_task_t *tsk;
+
+	tsk = wo->wait.task;
+
+	wo->notask_error = ISC_WECHILD;
+	if (ilisti_empty(&tsk->children))
+		goto notask;
+
+	if (wo->wo_target != NULL) {
+		retval = i_do_wait_task(wo);
+		if (retval)
+			return retval;
+	} else {
+		ilinode_t *pos;
+		ilinode_t *tmp;
+		idsched_task_t *chld;
+
+		ILISTI_FOREACH_SAFE(pos, tmp, &tsk->children) {
 			chld = ILISTI_ENTRY(pos, idsched_task_t, sibling);
 
 			if (!(_I__TASK_HAS(chld, IDSCHED_TASK_DONE)))
 				continue;
 
-			if (status != NULL)
-				*status = chld->exitst;
+			wo->wo_stat = chld->exitst;
 
 			ilisti_remove(&chld->sibling);
 			_I__TASK_SET(chld, IDSCHED_TASK_REAPED);
-			i_reaper_enqueue(&t->sched->reaper, chld);
+			i_reaper_enqueue(&tsk->sched->reaper, chld);
 
-			t->sc_ret = 0;
-			return;
+			tsk->sc_ret = 0;
+			retval = ISC_WREAPED;
+			return retval;
 		}
 
-		if (ilisti_empty(&t->children)) {
-			t->sc_ret = -1;
-			return;
-		}
-
-		ilisti_init(&t->wait.node);
-		t->wait.task   = t;
-		t->wait.target = NULL;
-
-		i_waitqadd(&t->wait_chldexit, &t->wait);
-
-		_I__TASK_STSTAT(t, IDSCHED_TASK_BLOCKED);
-		t->sc_ret = 0;
-		return;
+		retval = ISC_WNOWAIT;
+		return retval;
 	}
+ notask:
+	retval = wo->notask_error;
+	return retval;
 }
 
-static void i_sys_waittask(idsched_task_t *t)
+static long i_do_wait(struct iwait_opts *wo)
 {
-	idsched_task_t *chld;
-	int            *status;
-	int             options;
+	idsched_task_t *tsk = i_core_self()->currt;
+	int retval;
 
-	chld    = (idsched_task_t *)t->sc_arg[0];
-	status  = (int *)t->sc_arg[1];
-	options = (int)t->sc_arg[2];
+	wo->wait.task = tsk;
+	wo->wait.target = wo->wo_target;
 
-	(void)options;
+	i_waitqadd(&tsk->wait_chldexit, &wo->wait);
 
-	if (chld == NULL || chld->prnt != t) {
-		t->sc_ret = -1;
-		return;
-	}
+	do {
+		retval = i__do_wait(wo);
 
-	if (_I__TASK_HAS(chld, IDSCHED_TASK_DONE)) {
-		if (status != NULL)
-			*status = chld->exitst;
+		if (retval != ISC_WNOWAIT)
+			break;
 
-		ilisti_remove(&chld->sibling);
-		_I__TASK_SET(chld, IDSCHED_TASK_REAPED);
-		i_reaper_enqueue(&t->sched->reaper, chld);
+		_I__TASK_STSTAT(tsk, IDSCHED_TASK_BLOCKED);
+		i_schedule();
+	} while (1);
 
-		t->sc_ret = 0;
-		return;
-	}
+	i_waitqremove(&tsk->wait_chldexit, &wo->wait);
 
-	ilisti_init(&t->wait.node);
-	t->wait.task   = t;
-	t->wait.target = chld;
-	i_waitqadd(&t->wait_chldexit, &t->wait);
+	_I__TASK_STSTAT(tsk, IDSCHED_TASK_RUNNING);
 
-	_I__TASK_STSTAT(t, IDSCHED_TASK_BLOCKED);
-	t->sc_ret = 0;
+	return retval;
 }
 
-static void i_sys_fork(idsched_task_t *t)
+static long i_sys_wait(idsched_task_t *t)
+{
+	struct iwait_opts wo = {
+		.wo_target = NULL,
+		.wo_flags  = 0,
+	};
+	int *wstatus;
+	int ret;
+
+	wstatus = (int *)t->sc_arg[0];
+
+	ret = i_do_wait(&wo);
+	if (ret == ISC_WREAPED && wstatus != NULL)
+		*wstatus = wo.wo_stat;
+
+	return ret;
+}
+
+static long i_sys_wait4(idsched_task_t *t)
+{
+	struct iwait_opts wo = {
+		.wo_target = NULL,
+		.wo_flags  = 0,
+	};
+	int *wstatus;
+	long ret;
+
+	wo.wait.task = NULL;
+
+	wstatus = (int *)t->sc_arg[1];
+
+	/* Resolve target from pid argument.  */
+	wo.wo_target = (idsched_task_t *)t->sc_arg[0];
+
+	ret = i_do_wait(&wo);
+
+	if (ret == ISC_WREAPED && wstatus != NULL)
+		*wstatus = wo.wo_stat;
+
+	return ret;
+}
+
+static long i_sys_fork(idsched_task_t *t)
 {
 	idsched_task_t *prnt = t;
 	idsched_core_t *core = t->core;
-	idsched_task_t *chld = malloc(sizeof(idsched_task_t));
+	idsched_task_t *chld = calloc(1, sizeof(idsched_task_t));
 	if (chld == NULL) {
 		prnt->sc_ret = (imreg_t)IDSCHED_INVALID_CHILD;
-		return;
+		return (long)IDSCHED_INVALID_CHILD;
 	}
 
 	pthread_mutex_init(&chld->lck, NULL);
@@ -1002,6 +1150,7 @@ static void i_sys_fork(idsched_task_t *t)
 	pthread_mutex_unlock(&core->sched->lck);
 
 	memcpy(&chld->ctx, &prnt->ctx, sizeof(icontext_t));
+	memcpy(&chld->shctx, &prnt->shctx, sizeof(icontext_t));
 
 	chld->ctx.ic_mcontext.gregs[IMREG_RDI] = (ilib_uintptr_t)chld;
 	chld->ctx.ic_mcontext.gregs[IMREG_RAX] = 0;
@@ -1025,7 +1174,7 @@ static void i_sys_fork(idsched_task_t *t)
 		pthread_cond_destroy(&chld->cv);
 		free(chld);
 		prnt->sc_ret = (imreg_t)IDSCHED_INVALID_CHILD;
-		return;
+		return (long)IDSCHED_INVALID_CHILD;
 	}
 
 	chld->shctx.ic_stack.ss_sp = malloc(prnt->shctx.ic_stack.ss_size);
@@ -1036,7 +1185,7 @@ static void i_sys_fork(idsched_task_t *t)
 		free(chld);
 		free(chld->ctx.ic_stack.ss_sp);
 		prnt->sc_ret = (imreg_t)IDSCHED_INVALID_CHILD;
-		return;
+		return (long)IDSCHED_INVALID_CHILD;
 	}
 
 	chld->ctx.ic_stack.ss_size = prnt->ctx.ic_stack.ss_size;
@@ -1045,6 +1194,10 @@ static void i_sys_fork(idsched_task_t *t)
 	memcpy(chld->ctx.ic_stack.ss_sp,
 	       prnt->ctx.ic_stack.ss_sp,
 	       prnt->ctx.ic_stack.ss_size);
+
+	memcpy(chld->shctx.ic_stack.ss_sp,
+	       prnt->shctx.ic_stack.ss_sp,
+	       prnt->shctx.ic_stack.ss_size);
 
 #if IDSCHED_DIRTY_STACK_SANITIZE == 1
 	ilib_uintptr_t old_t = (ilib_uintptr_t)prnt;
@@ -1058,7 +1211,10 @@ static void i_sys_fork(idsched_task_t *t)
 			stack[i] = new_t;
 	}
 #else
-	i_relocate_stack(prnt, chld);
+	i_relocate_stack(prnt, chld, &prnt->ctx.ic_stack, &chld->ctx.ic_stack);
+	i_relocate_stack(prnt, chld, &prnt->shctx.ic_stack, &chld->shctx.ic_stack);
+	i_fix_frame_chain(&prnt->ctx.ic_stack, &chld->ctx.ic_stack, &chld->ctx);
+	i_fix_frame_chain(&prnt->shctx.ic_stack, &chld->shctx.ic_stack, &chld->shctx);
 #endif /* IDSCHED_DIRTY_STACK_SANITIZE == 1 */
 #if IDSCHED_DEBUG == 1
 	printf("stack copy parent t=%p child t=%p\n",
@@ -1072,9 +1228,11 @@ static void i_sys_fork(idsched_task_t *t)
 	off = prnt->ctx.ic_mcontext.gregs[IMREG_RBP] - (ilib_uintptr_t)prnt->ctx.ic_stack.ss_sp;
 	chld->ctx.ic_mcontext.gregs[IMREG_RBP] = (ilib_uintptr_t)chld->ctx.ic_stack.ss_sp + off;
 
-#if defined(__x86_64__)
-	i_fix_frame_chain(prnt, chld);
-#endif /* defined(__x86_64__) */
+	off = prnt->shctx.ic_mcontext.gregs[IMREG_RSP] - (ilib_uintptr_t)prnt->shctx.ic_stack.ss_sp;
+	chld->shctx.ic_mcontext.gregs[IMREG_RSP] = (ilib_uintptr_t)chld->shctx.ic_stack.ss_sp + off;
+
+	off = prnt->shctx.ic_mcontext.gregs[IMREG_RBP] - (ilib_uintptr_t)prnt->shctx.ic_stack.ss_sp;
+	chld->shctx.ic_mcontext.gregs[IMREG_RBP] = (ilib_uintptr_t)chld->shctx.ic_stack.ss_sp + off;
 
 	chld->fn     = prnt->fn;
 	chld->arg    = prnt->arg;
@@ -1088,17 +1246,12 @@ static void i_sys_fork(idsched_task_t *t)
 	pthread_mutex_init(&chld->wait_chldexit.lck, NULL);
 	ilisti_init(&chld->wait_chldexit.head);
 
-	chld->prnt   = prnt;
-
-	ilisti_push_back(&prnt->children, &chld->sibling);
-
 	chld->core   = prnt->core;
 	chld->pred   = prnt->pred;
 	chld->prio   = prnt->prio;
 	chld->sched  = prnt->sched;
 	chld->exitst = 0;
 	chld->rt     = 0;
-	_I__TASK_STSTAT(chld, IDSCHED_TASK_READY);
 	chld->ctx.ic_link = &chld->shctx;
 
 	chld->sc_nr  = IDSCHED_SYS_NONE;
@@ -1106,13 +1259,20 @@ static void i_sys_fork(idsched_task_t *t)
 	prnt->sc_ret = (long)chld;
 	chld->sc_ret = 0;
 
+	chld->prnt   = prnt;
+	ilisti_push_back(&prnt->children, &chld->sibling);
+
+	_I__TASK_STSTAT(chld, IDSCHED_TASK_READY);
+
 	pthread_mutex_lock(&core->lck);
 	pqueue_push(&core->rq, &chld);
 	pthread_cond_signal(&core->cv);
 	pthread_mutex_unlock(&core->lck);
+
+	return (long)chld;
 }
 
-static void i_sys_exec(idsched_task_t *t)
+static long i_sys_exec(idsched_task_t *t)
 {
 	int (*fn)(void *) = (void *)t->sc_arg[0];
 	void *arg = (void *)t->sc_arg[1];
@@ -1127,13 +1287,12 @@ static void i_sys_exec(idsched_task_t *t)
 	abort();
 }
 
-static void i_sys_yield(idsched_task_t *t)
+static long i_sys_yield(idsched_task_t *t)
 {
-	pthread_mutex_lock(&t->lck);
 	_I__TASK_STSTAT(t, IDSCHED_TASK_READY);
-	pthread_mutex_unlock(&t->lck);
-
 	t->sc_ret = 0;
+
+	return 0;
 }
 
 static void i_exit_reparent(idsched_task_t *prnt)
@@ -1170,7 +1329,7 @@ static void i_exit_notify(idsched_task_t *t)
 		i_reaper_enqueue(&t->sched->reaper, t);
 }
 
-static void i_sys_exit(idsched_task_t *t)
+static long i_sys_exit(idsched_task_t *t)
 {
 #if IDSCHED_DEBUG == 1
 	printf("[DEBUG_SCHED]: EXIT syscall tid=%zu\n", t->tid);
@@ -1576,25 +1735,14 @@ int idsched_task_waittask(idsched_task_t *t, int *wstatus)
 
 	core = i_core_self();
 
-	if (core != NULL && (curr = core->currt) != NULL) {
-		curr->sc_arg[0] = (ilib_uintptr_t)t;
-		curr->sc_arg[1] = (ilib_uintptr_t)wstatus;
-		curr->sc_arg[2] = 0;
+	if (core == NULL && (curr = core->currt) == NULL)
+		return -1;
 
-		return (int)i_schedcall(curr, IDSCHED_SYS_WAITT);
-	}
+	curr->sc_arg[0] = (ilib_uintptr_t)t;
+	curr->sc_arg[1] = (ilib_uintptr_t)wstatus;
+	curr->sc_arg[2] = 0;
 
-	pthread_mutex_lock(&t->lck);
-
-	while (!(_I__TASK_HAS(t, IDSCHED_TASK_DONE)))
-		pthread_cond_wait(&t->cv, &t->lck);
-
-	if (wstatus != NULL)
-		*wstatus = t->exitst;
-
-	pthread_mutex_unlock(&t->lck);
-
-	return 0;
+	return (int)i_schedcall(curr, IDSCHED_SYS_WAIT4);
 }
 
 
