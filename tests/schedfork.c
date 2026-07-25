@@ -23,7 +23,7 @@ static int forktask(void *arg)
 		chld = idsched_task_fork();
 		if (chld == NULL) {
 			printf("Child %d\n", i);
-			return 0;
+			idsched_task_exec(printcounter, NULL);
 		} else {
 			printf("Parent %d\n", i);
 		}
@@ -47,6 +47,25 @@ static int parent(void *arg)
 	return 0;
 }
 
+static int parent2(void *arg)
+{
+	idsched_task_t *child;
+	int status;
+
+	child = idsched_task_fork();
+
+	if (child == NULL) {
+		printf("Child\n");
+		return 42;
+	}
+
+	idsched_task_waittask(child, &status);
+
+	printf("child exited: %d\n", status);
+
+	return 0;
+}
+
 int main(void)
 {
 	idsched_t sched;
@@ -56,7 +75,7 @@ int main(void)
 	assert(idsched_create(&sched, 2) == 0);
 	assert(idsched_core_startup(&sched, 1) == 1);
 
-	assert(idsched_task_create(&sched, &task, parent, NULL) != IDSCHED_INVALID_TID);
+	assert(idsched_task_create(&sched, &task, forktask, NULL) != IDSCHED_INVALID_TID);
 	assert(idsched_task_submit(&sched, &task) == 0);
 
 	assert(idsched_task_waittask(&task, &status) == 0);
