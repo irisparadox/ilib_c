@@ -1011,7 +1011,7 @@ static ilib_uint64_t i_pred_predict(ipred_t *p, int (*fn)(void *), ilib_uint64_t
 	ipred_entry_t *entry;
 	pthread_mutex_lock(&p->lck);
 
-	entry = ihstmap_get(&p->table, fn);
+	entry = ihstmap_get(&p->table, (void *)(ilib_uintptr_t)fn);
 
 	if (entry == NULL) {
 		*nsa = 0;
@@ -1030,7 +1030,7 @@ static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
 	ipred_entry_t *entry;
 	pthread_mutex_lock(&p->lck);
 
-	entry = ihstmap_get(&p->table, fn);
+	entry = ihstmap_get(&p->table, (void *)(ilib_uintptr_t)fn);
 
 	if (entry == NULL) {
 		entry = malloc(sizeof(ipred_entry_t));
@@ -1042,7 +1042,7 @@ static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
 		entry->ema = rt;
 		entry->nsa = 1;
 
-		if (iunlikely(ihstmap_insert(&p->table, fn, entry, 0) != 0)) {
+		if (iunlikely(ihstmap_insert(&p->table, (void *)(ilib_uintptr_t)fn, entry, 0) != 0)) {
 			free(entry);
 			pthread_mutex_unlock(&p->lck);
 			return -1;
@@ -1353,6 +1353,8 @@ static long i_sys_fork(idsched_task_t *t)
 	chld->core   = prnt->core;
 	chld->pred   = prnt->pred;
 	chld->prio   = prnt->prio;
+	chld->nivcsw = prnt->nivcsw;
+	chld->nvcsw  = prnt->nvcsw;
 	chld->sched  = prnt->sched;
 	chld->exitst = 0;
 	chld->rt     = 0;
@@ -1380,7 +1382,7 @@ static long i_sys_fork(idsched_task_t *t)
 
 static long i_sys_exec(idsched_task_t *t)
 {
-	int (*fn)(void *) = (void *)t->sc_arg[0];
+	int (*fn)(void *) = (int (*)(void *))t->sc_arg[0];
 	void *arg = (void *)t->sc_arg[1];
 
 	t->fn  = fn;
@@ -1662,6 +1664,9 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->rt       = 0;
 	t->pred     = 0;
 	t->prio     = 0;
+
+	t->nivcsw   = 0;
+	t->nvcsw    = 0;
 
 	ilisti_init(&t->children);
 	ilisti_init(&t->sibling);
