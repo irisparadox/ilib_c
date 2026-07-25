@@ -177,6 +177,9 @@ struct idsched_task {
 	ilib_uint64_t   pred;  /* prediction */
 	ilib_uint64_t   prio;  /* priority */
 
+	ilib_uint64_t   nivcsw;
+	ilib_uint64_t   nvcsw;
+
 	pthread_mutex_t lck;
 	pthread_cond_t  cv;
 
@@ -679,60 +682,102 @@ static void *i_reaper_main(void *arg)
 
 /* Main loop */
 
+/*
+ * i__schedule() is the main scheduler function.
+ *
+ * This function is heavily based on Linux 7.2 kernel scheduler.
+ * The scheduler is primarily driven through the following execution paths:
+ *
+ * 1. Explicit blocking: waitqueue.
+ *
+ *    A task may voluntarily block by waiting on a waitqueue. It is then
+ *    that the control is yielded back to the scheduler. The task remains
+ *    ineligible for execution until it is explicitly awakened.
+ *
+ * 2. Wakeups won't cause an entry into the scheduler. A task will be added
+ *    to the run-queue and will wait to be scheduled the next cycle.
+ *
+ *    For now, there's no preemption mechanism built for this scheduler.
+ *    This means tasks are executed from beginning to end, that is if the
+ *    task doesn't yield.
+ */
 static void i__schedule(idsched_core_t *core, idsched_task_t *prev)
 {
 	idsched_task_t *next;
 	char is_switch;
+	unsigned long *switch_count;
+	unsigned long prev_state;
 
 	pthread_mutex_lock(&core->lck);
 	pthread_mutex_lock(&prev->lck);
 
-	if (prev != &core->idle && ilikely(_I__TASK_HAS(prev, IDSCHED_TASK_READY)))
-		pqueue_push(&core->rq, &prev);
+	switch_count = &prev->nivcsw;
+	prev_state = prev->flags;
+
+	if (prev == &core->idle) {
+		if (pqueue_empty(&core->rq)) {
+			pthread_mutex_unlock(&prev->lck);
+
+			if (core->flags & IDSCHED_CORE_STOPPING)
+				goto stopping;
+
+			next = prev;
+			goto picked;
+		}
+	} else if (!(prev_state & IDSCHED_TASK_RUNNING)) {
+		switch_count = &prev->nvcsw;
+
+		if (ilikely(prev_state & IDSCHED_TASK_READY))
+			pqueue_push(&core->rq, &prev);
+	}
 
 	pthread_mutex_unlock(&prev->lck);
 
-	if (iunlikely(pqueue_empty(&core->rq)))
-		goto idle;
+pick_again:
+	if (iunlikely(pqueue_empty(&core->rq))) {
+#if IDSCHED_DEBUG == 1
+		printf("[DEBUG_SCHED]: __SCHEDULE idle branch\n");
+#endif
+		next = &core->idle;
+
+		if (core->flags & IDSCHED_CORE_STOPPING)
+			goto stopping;
+
+		goto picked;
+	}
 
 	next = pqueue_top(&core->rq, idsched_task_t *);
 	pqueue_pop(&core->rq);
-	goto picked;
 
-idle:
-#if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: __SCHEDULE idle branch\n");
-#endif
-	next = &core->idle;
+picked:
+	is_switch = prev != next;
+	if (ilikely(is_switch)) {
+		++(*switch_count);
 
-	if (core->flags & IDSCHED_CORE_STOPPING) {
-#if IDSCHED_DEBUG == 1
-		printf("[DEBUG_SCHED]: __SCHEDULE idle shutdown core\n");
-#endif
+		core->currt = next;
+		_I__TASK_STSTAT(next, IDSCHED_TASK_RUNNING);
+
 		pthread_mutex_unlock(&core->lck);
-		isetcontext(&core->bootctx);
+
+		isetcontext(&next->shctx);
+
 		abort();
+	} else {
+		pthread_mutex_unlock(&core->lck);
 	}
 
- picked:
-	is_switch = prev != next;
-	if (iunlikely(!is_switch))
-		goto unlock;
+	return;
 
-	core->currt = next;
-	_I__TASK_STSTAT(next, IDSCHED_TASK_RUNNING);
-
+stopping:
+#if IDSCHED_DEBUG == 1
+	printf("[DEBUG_SCHED]: __SCHEDULE idle shutdown core\n");
+#endif
 	pthread_mutex_unlock(&core->lck);
-
-	isetcontext(&next->shctx);
-
+	isetcontext(&core->bootctx);
 	abort();
-
-unlock:
-	pthread_mutex_unlock(&core->lck);
 }
 
-static void i__schedule_loop(idsched_core_t *core)
+static inline void i__schedule_loop(idsched_core_t *core)
 {
 	do {
 		i__schedule(core, core->currt);
@@ -744,6 +789,18 @@ static inline void i_schedule(void)
 	i__schedule_loop(i_core_self());
 }
 
+/*
+ * Initial bootstrap routine.
+ *
+ * This function sets up the idle task and
+ * kick-starts it for execution. The context
+ * is saved as this bring-up machinery has to
+ * be the one to return later for the pthread
+ * to join. Technically, it could be done via
+ * a shutdown routine using pthread_exit, but
+ * since there's no need we can re-use this
+ * entry.
+ */
 static void i_core_run(idsched_core_t *core)
 {
 	idsched_task_t *idle = &core->idle;
@@ -818,6 +875,8 @@ static void i_core_run(idsched_core_t *core)
 	imakecontext(&idle->shctx, (void (*)(void))i_sched_entry, 1, idle);
 
 	igetcontext(&core->bootctx);
+	/* bootstrap context checkpoint here. After shutdown is requested
+           the scheduler comes back to this context and finishes execution.  */
 
 	if (core->flags & IDSCHED_CORE_STOPPING) {
 		pthread_mutex_destroy(&idle->wait_chldexit.lck);
@@ -903,7 +962,6 @@ static void i_task_entry(idsched_task_t *t)
 }
 
 /* Checks for bootstrap */
-
 static int i_is_bst_core(idsched_t *sched)
 {
 	return pthread_equal(pthread_self(), sched->cores[0].thread);
@@ -1004,6 +1062,11 @@ static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
 
 /* SYSCALL IMPLEMENTATIONS */
 
+/*
+ * These two functions (wait_consider_task and do_wait_task)
+ * are optimizations for waittask which follows the same idea
+ * of waitpid.
+ */
 static long i_wait_consider_task(struct iwait_opts *wo)
 {
 	int retval;
@@ -1144,6 +1207,32 @@ static long i_sys_wait4(idsched_task_t *t)
 	return ret;
 }
 
+/*
+ * Fork routine.
+ *
+ * This function creates a new task and copies both the
+ * kernel context (shctx) and user context (ctx). Because
+ * this is a very rudimentary routine in user-space the stack
+ * has to be relocated. This is because when we copy the stack,
+ * the address space is still the same, whereas in real fork()
+ * semantics, the copy-on-write aspect makes it so any references
+ * in the stack are immediately valid thanks to virtual memory.
+ *
+ * The calls to relocation and frame fix try to "guess" any
+ * references inside the parent's stack and fix them by relocating
+ * them using the parent task as reference.
+ *
+ * If successful, it immediately marks the child ready for
+ * execution and queues it.
+ *
+ * The parent's return value is set to the child's pointer
+ * and the child's return value is set to NULL, following
+ * fork() semantics. If fail it returns a pointer set to
+ * IDSCHED_INVALID_CHILD (which is -1).
+ *
+ * WARNING: current implementation only works for x86-64. Other
+ * architectures are NOT supported yet.
+ */
 static long i_sys_fork(idsched_task_t *t)
 {
 	idsched_task_t *prnt = t;
@@ -1164,6 +1253,7 @@ static long i_sys_fork(idsched_task_t *t)
 	memcpy(&chld->ctx, &prnt->ctx, sizeof(icontext_t));
 	memcpy(&chld->shctx, &prnt->shctx, sizeof(icontext_t));
 
+	/* Technically not useful in practice since icontext ignores RAX.  */
 	chld->ctx.ic_mcontext.gregs[IMREG_RDI] = (ilib_uintptr_t)chld;
 	chld->ctx.ic_mcontext.gregs[IMREG_RAX] = 0;
 #if IDSCHED_DEBUG == 1
@@ -1211,6 +1301,8 @@ static long i_sys_fork(idsched_task_t *t)
 	       prnt->shctx.ic_stack.ss_sp,
 	       prnt->shctx.ic_stack.ss_size);
 
+	/* Okay. This was a dirty and provisional fix,
+           but we leave it alone.  */
 #if IDSCHED_DIRTY_STACK_SANITIZE == 1
 	ilib_uintptr_t old_t = (ilib_uintptr_t)prnt;
 	ilib_uintptr_t new_t = (ilib_uintptr_t)chld;
