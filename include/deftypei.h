@@ -36,5 +36,12 @@ typedef unsigned long  ilib_uintptr_t;
 #define NULL ((void *)0)
 #endif
 
+#if defined(__GNUC__) || defined(__clang__)
+#define ilikely(x)	__builtin_expect(!!(x), 1)
+#define iunlikely(x)	__builtin_expect(!!(x), 0)
+#else
+#define ilikely(x)	(x)
+#define iunlikely(x)	(x)
+#endif /* defined(__GNUC__) || defined(__clang__) */
 
 #endif /* DEFTYPEI_H */

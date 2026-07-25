@@ -1,7 +1,6 @@
 #ifndef IDSCHED_H_
 #define IDSCHED_H_
 
-#include "x86-64/i_context.h"
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif  /* _POSIX_C_SOURCE */
@@ -683,16 +682,17 @@ static void *i_reaper_main(void *arg)
 static void i__schedule(idsched_core_t *core, idsched_task_t *prev)
 {
 	idsched_task_t *next;
+	char is_switch;
 
 	pthread_mutex_lock(&core->lck);
 	pthread_mutex_lock(&prev->lck);
 
-	if (prev != &core->idle && _I__TASK_HAS(prev, IDSCHED_TASK_READY))
+	if (prev != &core->idle && ilikely(_I__TASK_HAS(prev, IDSCHED_TASK_READY)))
 		pqueue_push(&core->rq, &prev);
 
 	pthread_mutex_unlock(&prev->lck);
 
-	if (pqueue_empty(&core->rq))
+	if (iunlikely(pqueue_empty(&core->rq)))
 		goto idle;
 
 	next = pqueue_top(&core->rq, idsched_task_t *);
@@ -714,8 +714,9 @@ idle:
 		abort();
 	}
 
-picked:
-	if (next == prev)
+ picked:
+	is_switch = prev != next;
+	if (iunlikely(!is_switch))
 		goto unlock;
 
 	core->currt = next;
@@ -774,7 +775,7 @@ static void i_core_run(idsched_core_t *core)
 	idle->ctx.ic_stack.ss_size  = IDSCHED_STCK_SIZE;
 	idle->ctx.ic_stack.ss_flags = 0;
 
-	if (idle->ctx.ic_stack.ss_sp == NULL) {
+	if (iunlikely(idle->ctx.ic_stack.ss_sp == NULL)) {
 		pthread_mutex_destroy(&idle->wait_chldexit.lck);
 		return;
 	}
@@ -783,20 +784,20 @@ static void i_core_run(idsched_core_t *core)
 	idle->shctx.ic_stack.ss_size  = IDSCHED_STCK_SIZE;
 	idle->shctx.ic_stack.ss_flags = 0;
 
-	if (idle->shctx.ic_stack.ss_sp == NULL) {
+	if (iunlikely(idle->shctx.ic_stack.ss_sp == NULL)) {
 		pthread_mutex_destroy(&idle->wait_chldexit.lck);
 		free(idle->ctx.ic_stack.ss_sp);
 		return;
 	}
 
-	if (igetcontext(&idle->ctx) != 0) {
+	if (iunlikely(igetcontext(&idle->ctx) != 0)) {
 		pthread_mutex_destroy(&idle->wait_chldexit.lck);
 		free(idle->ctx.ic_stack.ss_sp);
 		free(idle->shctx.ic_stack.ss_sp);
 		return;
 	}
 
-	if (igetcontext(&idle->shctx) != 0) {
+	if (iunlikely(igetcontext(&idle->shctx) != 0)) {
 		pthread_mutex_destroy(&idle->wait_chldexit.lck);
 		free(idle->ctx.ic_stack.ss_sp);
 		free(idle->shctx.ic_stack.ss_sp);
@@ -975,7 +976,7 @@ static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
 
 	if (entry == NULL) {
 		entry = malloc(sizeof(ipred_entry_t));
-		if (entry == NULL) {
+		if (iunlikely(entry == NULL)) {
 			pthread_mutex_unlock(&p->lck);
 			return -1;
 		}
@@ -983,7 +984,7 @@ static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
 		entry->ema = rt;
 		entry->nsa = 1;
 
-		if (ihstmap_insert(&p->table, fn, entry, 0) != 0) {
+		if (iunlikely(ihstmap_insert(&p->table, fn, entry, 0) != 0)) {
 			free(entry);
 			pthread_mutex_unlock(&p->lck);
 			return -1;
@@ -1086,7 +1087,7 @@ static long i_do_wait(struct iwait_opts *wo)
 	do {
 		retval = i__do_wait(wo);
 
-		if (retval != ISC_WNOWAIT)
+		if (ilikely(retval != ISC_WNOWAIT))
 			break;
 
 		_I__TASK_STSTAT(tsk, IDSCHED_TASK_BLOCKED);
@@ -1148,7 +1149,7 @@ static long i_sys_fork(idsched_task_t *t)
 	idsched_task_t *prnt = t;
 	idsched_core_t *core = t->core;
 	idsched_task_t *chld = calloc(1, sizeof(idsched_task_t));
-	if (chld == NULL) {
+	if (iunlikely(chld == NULL)) {
 		prnt->sc_ret = (imreg_t)IDSCHED_INVALID_CHILD;
 		return (long)IDSCHED_INVALID_CHILD;
 	}
@@ -1180,7 +1181,7 @@ static long i_sys_fork(idsched_task_t *t)
 
 	chld->ctx.ic_stack.ss_sp = malloc(prnt->ctx.ic_stack.ss_size);
 	chld->ctx.ic_stack.ss_flags = 0;
-	if (chld->ctx.ic_stack.ss_sp == NULL) {
+	if (iunlikely(chld->ctx.ic_stack.ss_sp == NULL)) {
 		pthread_mutex_destroy(&chld->lck);
 		pthread_cond_destroy(&chld->cv);
 		free(chld);
@@ -1190,7 +1191,7 @@ static long i_sys_fork(idsched_task_t *t)
 
 	chld->shctx.ic_stack.ss_sp = malloc(prnt->shctx.ic_stack.ss_size);
 	chld->shctx.ic_stack.ss_flags = 0;
-	if (chld->shctx.ic_stack.ss_sp == NULL) {
+	if (iunlikely(chld->shctx.ic_stack.ss_sp == NULL)) {
 		pthread_mutex_destroy(&chld->lck);
 		pthread_cond_destroy(&chld->cv);
 		free(chld);
@@ -1377,7 +1378,7 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 	sched->cores  = calloc(ncores, sizeof(idsched_core_t));
 	i_pred_init(&sched->gpred);
 
-	if (sched->cores == NULL) return -1;
+	if (iunlikely(sched->cores == NULL)) return -1;
 
 	for (i = 0; i < ncores; ++i) {
 		idsched_core_t *core = &sched->cores[i];
@@ -1521,7 +1522,7 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 		printf("[DEBUG_SCHED]: Shutdown to core %p\n", core);
 #endif
 
-		if (core == NULL) {
+		if (iunlikely(core == NULL)) {
 			pthread_mutex_unlock(&sched->lck);
 			break;
 		}
@@ -1584,7 +1585,7 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->ctx.ic_stack.ss_size  = IDSCHED_STCK_SIZE;
 	t->ctx.ic_stack.ss_flags = 0;
 
-	if (t->ctx.ic_stack.ss_sp == NULL) {
+	if (iunlikely(t->ctx.ic_stack.ss_sp == NULL)) {
 		pthread_mutex_destroy(&t->wait_chldexit.lck);
 		return -1;
 	}
@@ -1593,20 +1594,20 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->shctx.ic_stack.ss_size  = IDSCHED_STCK_SIZE;
 	t->shctx.ic_stack.ss_flags = 0;
 
-	if (t->shctx.ic_stack.ss_sp == NULL) {
+	if (iunlikely(t->shctx.ic_stack.ss_sp == NULL)) {
 		pthread_mutex_destroy(&t->wait_chldexit.lck);
 		free(t->ctx.ic_stack.ss_sp);
 		return -1;
 	}
 
-	if (igetcontext(&t->ctx) != 0) {
+	if (iunlikely(igetcontext(&t->ctx) != 0)) {
 		pthread_mutex_destroy(&t->wait_chldexit.lck);
 		free(t->ctx.ic_stack.ss_sp);
 		free(t->shctx.ic_stack.ss_sp);
 		return -1;
 	}
 
-	if (igetcontext(&t->shctx) != 0) {
+	if (iunlikely(igetcontext(&t->shctx) != 0)) {
 		pthread_mutex_destroy(&t->wait_chldexit.lck);
 		free(t->ctx.ic_stack.ss_sp);
 		free(t->shctx.ic_stack.ss_sp);
