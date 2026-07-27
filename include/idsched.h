@@ -1,6 +1,7 @@
 #ifndef IDSCHED_H_
 #define IDSCHED_H_
 
+#include <bits/time.h>
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif  /* _POSIX_C_SOURCE */
@@ -35,6 +36,7 @@
 #define IDSCHED_TASK_REAPED   (1u << 5)
 #define IDSCHED_TASK_USROWN   (1u << 6)
 
+#define ISC_TASK_ON_RQ_NONE      0
 #define ISC_TASK_ON_RQ_QUEUED    1
 #define ISC_TASK_ON_RQ_MIGRATING 2
 
@@ -77,7 +79,9 @@
 #define IDSCHED_INVALID_TID ((ilib_uint64_t)-1)
 #define IDSCHED_IDLE_TID ((ilib_uint64_t)-2)
 
-typedef ilib_byte_t u8;
+typedef ilib_byte_t   u8;
+typedef ilib_uint64_t u64;
+typedef ilib_int64_t  s64;
 
 struct rqi;
 struct rt_rqi;
@@ -88,19 +92,6 @@ typedef struct idsched      idsched_t;
 typedef struct idsched_acpi idsched_acpi_t;
 typedef struct idsched_core idsched_core_t;
 typedef struct idsched_task idsched_task_t;
-
-typedef struct i_pred_entry ipred_entry_t;
-typedef struct i_pred       ipred_t;
-
-struct i_pred {
-	pthread_mutex_t lck;
-	ihstmap_t       table;
-};
-
-struct i_pred_entry {
-	ilib_uint64_t ema;
-	ilib_uint64_t nsa;
-};
 
 typedef struct iwaitq_entry {
 	ilinode_t       node;
@@ -147,8 +138,6 @@ struct idsched {
 
 	ireaper         reaper;
 
-	ipred_t         gpred;
-
 	pthread_mutex_t lck;
 };
 
@@ -164,45 +153,48 @@ struct idsched_acpi {
 #define IDSCHED_SC_ARGC 6
 
 struct idsched_task {
-	int  (*fn)(void *);
-	void  *arg;
+	int                       (*fn)(void *);
+	void                       *arg;
 
-	idsched_task_t *prnt;
+	idsched_task_t             *prnt;
 
-	ilinode_t children; /* list head.  */
-	ilinode_t sibling;  /* node in parent's children list.  */
+	ilinode_t                   children; /* list head.  */
+	ilinode_t                   sibling;  /* node in parent's children list.  */
 
-	iwaitq wait_chldexit;
-	iwaitq_entry wait;
+	iwaitq                      wait_chldexit;
+	iwaitq_entry                wait;
 
-	icontext_t      ctx;
-	icontext_t      shctx;
+	icontext_t                  ctx;
+	icontext_t                  shctx;
 
-	idsched_t      *sched;
-	idsched_core_t *core;
+	idsched_t                  *sched;
+	idsched_core_t             *core;
 
-	unsigned int    __state;
+	unsigned int                __state;
 
-	u8		on_rq;
+	u8                          on_rq;
+	unsigned int                flags;
+	idsched_tid                 tid;
 
-	unsigned int    flags;
-	idsched_tid     tid;
+	ilinode_t                   run_list;
 
-	int exitst;
+	int                         exitst;
 
-	ilib_uint64_t   rt;    /* runtime */
-	ilib_uint64_t   pred;  /* prediction */
-	ilib_uint64_t   prio;  /* priority */
+	u64                         exec_start;
+	u64                         sum_exec_runtime;
+	int                         prio;
 
-	ilib_uint64_t   nivcsw;
-	ilib_uint64_t   nvcsw;
+	const struct idsched_class *sched_class;
 
-	pthread_mutex_t lck;
-	pthread_cond_t  cv;
+	ilib_uint64_t               nivcsw;
+	ilib_uint64_t               nvcsw;
 
-	int   sc_nr;
-	ilib_uintptr_t sc_arg[IDSCHED_SC_ARGC];
-	long  sc_ret;
+	pthread_mutex_t             lck;
+	pthread_cond_t              cv;
+
+	int                         sc_nr;
+	ilib_uintptr_t              sc_arg[IDSCHED_SC_ARGC];
+	long                        sc_ret;
 };
 
 struct idsched_core {
@@ -217,7 +209,6 @@ struct idsched_core {
 	pthread_cond_t  cv;
 
 	pqueue_t        rq;
-	ipred_t         lpred;
 
 	idsched_task_t *currt;
 	idsched_task_t  idle;
@@ -396,8 +387,6 @@ static idsched_core_t *i_core_self(void)
 {
 	return pthread_getspecific(i_core_key);
 }
-
-static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt);
 
 static int i_task_cmp(const void *a, const void *b)
 {
@@ -807,6 +796,14 @@ static void *i_reaper_main(void *arg)
 }
 
 /* Main loop */
+static inline u64 clock_task(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	return (u64)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
 
 static inline int task_on_rq_queued(idsched_task_t *p)
 {
@@ -831,6 +828,24 @@ static inline void add_nr_running(struct rqi *rq, unsigned count)
 static inline void sub_nr_running(struct rqi *rq, unsigned count)
 {
 	rq->nr_running -= count;
+}
+
+static u64 update_curr_common(struct rqi *rq)
+{
+	idsched_task_t *curr = rq->curr;
+	u64 now;
+	s64 delta_exec;
+
+	now = clock_task();
+
+	delta_exec = (s64)(now - curr->exec_start);
+	if (iunlikely(delta_exec <= 0))
+		return delta_exec;
+
+	curr->exec_start = now;
+	curr->sum_exec_runtime += delta_exec;
+
+	return delta_exec;
 }
 
 static int i_need_resched(void)
@@ -975,8 +990,6 @@ static void i_core_run(idsched_core_t *core)
 	_I__TASK_STSTAT(idle, IDSCHED_TASK_RUNNING);
 
 	idle->exitst = 0;
-	idle->rt     = 0;
-	idle->pred   = 0;
 	idle->prio   = 0;
 
 	ilisti_init(&idle->children);
@@ -1097,20 +1110,7 @@ static void i_task_entry(idsched_task_t *t)
 	int status;
 	struct timespec t0, t1;
 
-	clock_gettime(CLOCK_MONOTONIC, &t0);
 	status = t->fn(t->arg);
-	clock_gettime(CLOCK_MONOTONIC, &t1);
-
-	t->rt = (ilib_uint64_t)(t1.tv_sec - t0.tv_sec) * 1000000000ULL +
-		(ilib_uint64_t)(t1.tv_nsec - t0.tv_nsec);
-
-	pthread_mutex_lock(&t->core->lck);
-	i_pred_update(&t->core->lpred, t->fn, t->rt);
-	pthread_mutex_unlock(&t->core->lck);
-
-	pthread_mutex_lock(&t->sched->lck);
-	i_pred_update(&t->sched->gpred, t->fn, t->rt);
-	pthread_mutex_unlock(&t->sched->lck);
 
 	t->sc_arg[0] = (ilib_uintptr_t)status;
 	i_schedcall(t, IDSCHED_SYS_EXIT);
@@ -1151,73 +1151,6 @@ static ilib_size_t i_cntr_flag(idsched_t *sched, ilib_uint32_t flag)
 	}
 
 	return cnt;
-}
-
-/* prediction private methods */
-static int i_pred_init(ipred_t *p)
-{
-	pthread_mutex_init(&p->lck, NULL);
-	return ihstmap_construct(&p->table, NULL, NULL);
-}
-
-static int i_pred_destroy(ipred_t *p)
-{
-	pthread_mutex_destroy(&p->lck);
-	return ihstmap_destroy(&p->table);
-}
-
-static ilib_uint64_t i_pred_predict(ipred_t *p, int (*fn)(void *), ilib_uint64_t *nsa)
-{
-	ipred_entry_t *entry;
-	pthread_mutex_lock(&p->lck);
-
-	entry = ihstmap_get(&p->table, (void *)(ilib_uintptr_t)fn);
-
-	if (entry == NULL) {
-		*nsa = 0;
-		pthread_mutex_unlock(&p->lck);
-		return IDSCHED_DEFAULT_RUNTIME;
-	}
-
-	*nsa = entry->nsa;
-	pthread_mutex_unlock(&p->lck);
-
-	return entry->ema;
-}
-
-static int i_pred_update(ipred_t *p, int (*fn)(void *), ilib_uint64_t rt)
-{
-	ipred_entry_t *entry;
-	pthread_mutex_lock(&p->lck);
-
-	entry = ihstmap_get(&p->table, (void *)(ilib_uintptr_t)fn);
-
-	if (entry == NULL) {
-		entry = malloc(sizeof(ipred_entry_t));
-		if (iunlikely(entry == NULL)) {
-			pthread_mutex_unlock(&p->lck);
-			return -1;
-		}
-
-		entry->ema = rt;
-		entry->nsa = 1;
-
-		if (iunlikely(ihstmap_insert(&p->table, (void *)(ilib_uintptr_t)fn, entry, 0) != 0)) {
-			free(entry);
-			pthread_mutex_unlock(&p->lck);
-			return -1;
-		}
-
-		pthread_mutex_unlock(&p->lck);
-
-		return 0;
-	}
-
-	entry->ema = (ilib_uint64_t)(IDSCHED_EMA_ALPHA * rt + I_ONEMALPHA * entry->ema);
-	++entry->nsa;
-
-	pthread_mutex_unlock(&p->lck);
-	return 0;
 }
 
 /* SYSCALL IMPLEMENTATIONS */
@@ -1511,13 +1444,11 @@ static long i_sys_fork(idsched_task_t *t)
 	ilisti_init(&chld->wait_chldexit.head);
 
 	chld->core   = prnt->core;
-	chld->pred   = prnt->pred;
 	chld->prio   = prnt->prio;
 	chld->nivcsw = prnt->nivcsw;
 	chld->nvcsw  = prnt->nvcsw;
 	chld->sched  = prnt->sched;
 	chld->exitst = 0;
-	chld->rt     = 0;
 	chld->ctx.ic_link = &chld->shctx;
 
 	chld->sc_nr  = IDSCHED_SYS_NONE;
@@ -1630,7 +1561,6 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 	sched->nseq   = 0;
 	sched->online = 0;
 	sched->cores  = calloc(ncores, sizeof(idsched_core_t));
-	i_pred_init(&sched->gpred);
 
 	if (iunlikely(sched->cores == NULL)) return -1;
 
@@ -1642,7 +1572,6 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 		core->currt = NULL;
 		core->flags = IDSCHED_CORE_OFFLINE;
 
-		i_pred_init(&core->lpred);
 		pthread_mutex_init(&core->lck, NULL);
 		pthread_cond_init(&core->cv, NULL);
 
@@ -1677,13 +1606,11 @@ int idsched_destroy(idsched_t *sched)
 		idsched_core_t *core = &sched->cores[i];
 
 		pqueue_destroy(&core->rq);
-		i_pred_destroy(&core->lpred);
 		pthread_mutex_destroy(&core->lck);
 		pthread_cond_destroy(&core->cv);
 	}
 
 	free(sched->cores);
-	i_pred_destroy(&sched->gpred);
 	pthread_mutex_destroy(&sched->lck);
 	sched->cores  = NULL;
 	sched->ncores = 0;
@@ -1822,15 +1749,17 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	_I__TASK_SET(t, IDSCHED_TASK_USROWN);
 	t->flags    = 0;
 	t->exitst   = 0;
-	t->rt       = 0;
-	t->pred     = 0;
-	t->prio     = 0;
+	t->prio     = MAX_RT_PRIO - 1;
+	t->on_rq    = ISC_TASK_ON_RQ_NONE;
+	t->exec_start = 0;
+	t->sum_exec_runtime = 0;
 
 	t->nivcsw   = 0;
 	t->nvcsw    = 0;
 
 	ilisti_init(&t->children);
 	ilisti_init(&t->sibling);
+	ilisti_init(&t->run_list);
 
 	ilisti_init(&t->wait.node);
 	t->wait.task = t;
@@ -1874,6 +1803,8 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 
 	t->shctx.ic_link = NULL;
 
+	t->sched_class = &rt_sched_class;
+
 	t->sc_nr  = IDSCHED_SYS_NONE;
 	t->sc_ret = 0;
 
@@ -1889,7 +1820,7 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 
 int idsched_task_destroy(idsched_task_t *t)
 {
-	if (t == NULL)
+	if (t == NULL || IREAD_ONCE(u8, t->on_rq))
 		return -1;
 
 	pthread_mutex_lock(&t->lck);
@@ -1915,6 +1846,20 @@ int idsched_task_destroy(idsched_task_t *t)
 	_I__TASK_STSTAT(t, IDSCHED_TASK_NEW);
 	t->tid    = 0;
 	t->exitst = 0;
+
+	t->prio = MAX_RT_PRIO - 1;
+	t->on_rq = ISC_TASK_ON_RQ_NONE;
+	t->exec_start = 0;
+	t->sum_exec_runtime = 0;
+
+	ilisti_init(&t->run_list);
+	ilisti_init(&t->children);
+	ilisti_init(&t->sibling);
+	ilisti_init(&t->wait.node);
+	ilisti_init(&t->wait_chldexit.head);
+
+	t->sched_class = NULL;
+	t->prnt = NULL;
 
 	free(t->ctx.ic_stack.ss_sp);
 	t->ctx.ic_stack.ss_sp   = NULL;
@@ -1963,12 +1908,7 @@ int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 	}
 
 	ilib_uint64_t ns;
-	t->pred = i_pred_predict(&core->lpred, t->fn, &ns);
 
-	if (ns < IDSCHED_PRED_MIN_HISTORY)
-		t->pred = i_pred_predict(&sch->gpred, t->fn, &ns);
-
-	t->prio  = t->pred;
 	t->core  = core;
 	_I__TASK_STSTAT(t, IDSCHED_TASK_READY);
 
@@ -2176,10 +2116,9 @@ static void yield_task_stop(struct rqi *rq)
 
 static void put_prev_task_stop(struct rqi *rq, idsched_task_t *p, idsched_task_t *next)
 {
-	// TODO update_curr_common
-	(void)rq;
 	(void)p;
 	(void)next;
+	update_curr_common(rq);
 }
 
 static void task_tick_stop(struct rqi *rq, idsched_task_t *p)
@@ -2207,8 +2146,144 @@ DEFINE_IDSCHED_CLASS(stop) = {
 	.update_curr		= update_curr_stop,
 };
 
-DEFINE_IDSCHED_CLASS(rt) = {
+static void requeue_task_rt(struct rqi *rq, idsched_task_t *p, int head)
+{
+	BUG_ON(p->on_rq != ISC_TASK_ON_RQ_QUEUED);
+	ilisti_remove(&p->run_list);
 
+	if (head)
+		ilisti_push_front(&rq->rt.active.queue[p->prio], &p->run_list);
+	else
+		ilisti_push_back(&rq->rt.active.queue[p->prio], &p->run_list);
+}
+
+static void yield_task_rt(struct rqi *rq)
+{
+	requeue_task_rt(rq, rq->curr, 0);
+}
+
+static void update_curr_rt(struct rqi *rq)
+{
+	idsched_task_t *curr = rq->curr;
+	s64 delta_exec;
+
+	if (curr->sched_class != &rt_sched_class)
+		return;
+
+	delta_exec = update_curr_common(rq);
+	if (iunlikely(delta_exec <= 0))
+		return;
+	/* TODO MAYBE ADD SOMETHING MORE HM?? */
+}
+
+static void enqueue_task_rt(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	(void)flags;
+
+	BUG_ON(p->on_rq != ISC_TASK_ON_RQ_NONE);
+	BUG_ON(p->prio >= MAX_RT_PRIO);
+
+	ilisti_push_back(&rq->rt.active.queue[p->prio], &p->run_list);
+
+	bitmap_set(rq->rt.active.bitmap, p->prio);
+
+	rq->rt.rt_nr_running++;
+	add_nr_running(rq, 1);
+
+	p->on_rq = ISC_TASK_ON_RQ_QUEUED;
+}
+
+static bool dequeue_task_rt(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	(void)flags;
+	update_curr_rt(rq);
+
+	BUG_ON(p->on_rq != ISC_TASK_ON_RQ_QUEUED);
+
+	ilisti_remove(&p->run_list);
+
+	if (ilisti_empty(&rq->rt.active.queue[p->prio]))
+		bitmap_clear(rq->rt.active.bitmap, p->prio);
+
+	rq->rt.rt_nr_running--;
+	sub_nr_running(rq, 1);
+
+	p->on_rq = ISC_TASK_ON_RQ_NONE;
+
+	return true;
+}
+
+static inline void set_next_task_rt(struct rqi *rq, idsched_task_t *p, bool first)
+{
+	(void)rq;
+	(void)first;
+	p->exec_start = clock_task();
+}
+
+static inline unsigned int rt_find_first_prio(const unsigned long *bitmap)
+{
+	unsigned int i;
+
+	for (i = 0; i <= MAX_RT_PRIO; ++i) {
+		if (bitmap_test(bitmap, i))
+			return i;
+	}
+
+	return MAX_RT_PRIO;
+}
+
+static idsched_task_t *_pick_next_task_rt(struct rqi *rq)
+{
+	struct irt_prio_array *array = &rq->rt.active;
+	ilinode_t *node;
+	unsigned int prio;
+
+	prio = rt_find_first_prio(array->bitmap);
+
+	if (prio >= MAX_RT_PRIO)
+		return NULL;
+
+	node = ilisti_front(&array->queue[prio]);
+
+	return ILISTI_ENTRY(node, idsched_task_t, run_list);
+}
+
+static idsched_task_t *pick_task_rt(struct rqi *rq)
+{
+	idsched_task_t *p;
+
+	if (!sched_rt_runnable(rq))
+		return NULL;
+
+	p = 0;
+
+	return p;
+}
+
+static void put_prev_task_rt(struct rqi *rq, idsched_task_t *p, idsched_task_t *next)
+{
+	(void)next;
+	update_curr_rt(rq);
+}
+
+static void task_tick_rt(struct rqi *rq, idsched_task_t *p)
+{
+	(void)p;
+	update_curr_rt(rq);
+}
+
+DEFINE_IDSCHED_CLASS(rt) = {
+	.enqueue_task		= enqueue_task_rt,
+	.dequeue_task		= dequeue_task_rt,
+	.yield_task		= yield_task_rt,
+
+	.pick_task		= pick_task_rt,
+	.put_prev_task		= put_prev_task_rt,
+	.set_next_task		= set_next_task_rt,
+
+	.task_tick		= task_tick_rt,
+
+	.update_curr		= update_curr_rt,
 };
 
 #endif /* I_IDSCH_IMPL */

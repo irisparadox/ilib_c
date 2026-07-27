@@ -60,4 +60,13 @@ typedef unsigned long  ilib_uintptr_t;
 #define DECLARE_BITMAP(name, bits) \
 	unsigned long name[BITS_TO_LONGS(bits)]
 
+#define bitmap_test(bmp, bit) bmp[bit / BITS_PER_TYPE(long)] & \
+	(1UL << (bit % BITS_PER_TYPE(long)))
+
+#define bitmap_set(bmp, bit) bmp[bit / BITS_PER_TYPE(long)] |= \
+	(1UL << (bit % BITS_PER_TYPE(long)))
+
+#define bitmap_clear(bmp, bit) bmp[bit / BITS_PER_TYPE(long)] &= \
+	~(1UL << (bit % BITS_PER_TYPE(long)))
+
 #endif /* DEFTYPEI_H */
