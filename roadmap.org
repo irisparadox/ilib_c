@@ -83,101 +83,124 @@ The exact policy for combining local and global predictions is intentionally lef
 
 **** Phase 3 - Dynamic Task Graph
 
-=Goal:= Running tasks can create and replace execution contexts.
+=Goal:= Running tasks can create, replace, and synchronize on execution contexts through a syscall trap model.
 
 - *Features* ::
-  * Parent/child relationship
-  * ~task_fork()~
-  * ~task_exec()~
-  * Dependency tracking
-  * Automatic wake-up when dependencies finish
+  * Scheduler space kernel stack (=shctx=) and syscall trap dispatch (=i_schedcall= / =i_dispatch_schedcall=), used by everything below.
+  * =task_yield()=, cooperative preemption point.
+  * =task_fork()=, full stack duplication with pointer relocation.
+  * =task_exec()=, in place context replacement.
+  * =task_wait()= / =task_waittask()=, parent/child exit synchronization.
+  * Orphan reparenting to the background reaper, with automatic cleanup for reaper owned tasks.
 
 - *Invariants* ::
-  * Children belong to the same scheduler.
-  * ~task_fork()~ duplicates the parent's execution context.
-  * Parent and child resume at the same instruction.
-  * Parent and child execute on independent stacks.
-  * ~task_exec()~ replaces the current execution context.
-  * Child starts as READY unless blocked by dependencies.
-  * Parent continues executing after ~task_fork()~.
+  * Children belong to the same scheduler as their parent.
+  * =task_fork()= duplicates the parent's user context (=ctx=) and scheduler space context (=shctx=), copying both stacks and relocating any pointer that referenced the parent's stack or the parent task struct.
+  * Parent and child resume at the same instruction, on independent, non overlapping stacks.
+  * Parent's fork call returns the child's task pointer, child's fork call returns 0/NULL, surfaced through =sc_ret=.
+  * =task_fork()= leaves the parent unchanged on allocation failure. No partial child, no queue mutation. Reports failure via =IDSCHED_INVALID_CHILD=.
+  * =task_exec()= replaces only the entry point/context; tid, =prnt=, =children=, =sibling=, and any task blocked waiting on this one are preserved.
+  * Child starts =READY= unless blocked on parent/child exit sync (=wait_chldexit=). That's the only dependency this phase implements.
+  * Parent continues executing after =task_fork()=.
+  * A task blocked in =wait()= / =wait4()= goes back to =READY= exactly once when the awaited condition is satisfied, and never blocks if the condition already holds.
+  * Every wait/exit syscall sets an explicit outcome (=ISC_WECHILD= / =ISC_WNOWAIT= / =ISC_WREAPED=) and an explicit =sc_ret= on every return path.
+  * Idle is excluded from the run queue and from every fork/exec/wait path by identity, not by flag state.
+  * A task created via =idsched_task_create()= is user owned (=IDSCHED_TASK_USROWN=) and never auto freed by the reaper. A task created via =task_fork()= is reaper owned and gets freed once reaped or adopted as an orphan.
+  * An orphaned task is reparented to the scheduler's reaper.
+
+- *Dropped* ::
+  * Generic task to task dependency graphs. Not doing this anymore, keeping it to parent/child exit sync only.
+
+- *Known limitations* ::
+  * Stack relocation on fork (=i_relocate_stack= / =i_fix_frame_chain=) is a best effort pointer scan, not COW. x86-64 only, assumes frame pointer based stacks.
 
 **** Phase 4 - Core Management
 
 =Goal:= Treat cores like CPUs.
 
 - *Features* ::
-  * Core shutdown
-  * Core startup
-  * Core states
-  * Bootstrap core management
-  * ACPI Watcher Thread
-  * Signal combination to bootstrap shutdown.
+  * Core shutdown / startup / states.
+  * Bootstrap core management.
+  * ACPI watcher thread.
+  * Signal driven bootstrap shutdown.
 
 - *Invariants* ::
   * Shutting down a core never loses tasks.
-  * The currently running task is allowed to finish before the core shuts down.
+  * The currently running task finishes before the core shuts down.
   * =READY= tasks are migrated before the worker thread exits.
-  * No hot-plugging.
-  * Core 0 can only be shutdown via signaling the ACPI.
+  * No hot plugging.
+  * Core 0 can only be shut down via signaling the ACPI.
 
 **** Phase 5 - Task Migration
 
 =Goal:= Move work between cores.
 
 - *Features* ::
-  * Manual migration
-  * Automatic migration
-  * Load requests
-  * Load donation
+  * Manual migration.
+  * Automatic migration.
+  * Load requests / load donation.
 
 - *Policy (initial)* ::
   * Only =READY= task instances may migrate.
 
 - *Future policies* ::
-  * Work stealing
-  * Load balancing
-  * Migration heuristics
+  * Work stealing, load balancing, migration heuristics.
 
-**** Phase 6 - Scheduling Policies
+**** Phase 6 - Scheduler Classes
 
-=Goal:= Improve scheduling decisions.
-
-- *Possible additions* ::
-  * Critical-path scheduling
-  * Dependency-aware scheduling
-  * Predictor improvements
-  * Aging
-  * Fair scheduling
-
-No implementation decided yet.
-
-**** Phase 7 - Cooperative Multitasking
-
-=Goal:= Allow infinite tasks without monopolizing a core.
+=Goal:= Replace the single hardcoded priority policy with a layered class system. Each core picks a task by walking classes in a fixed order (e.g. stop, deadline, realtime, fair, idle). Idle stays structurally excluded, same as Phase 3, it's never a candidate in a queue, only the fallback when nothing else is runnable.
 
 - *Features* ::
-  * ~task_yield()~
-  * User-space context
-  * Context Switching
-  * Resume execution
+  * =sched_class= vtable: =pick_next=, =enqueue=, =dequeue=, =task_tick= (for later preemption work).
+  * Current EMA priority logic moves into a =fair= class, unchanged in behavior.
+  * Idle becomes its own class whose =pick_next= always returns =core->idle= and whose =enqueue= is a no op. Makes the "idle never enters =rq=" rule enforced by the class itself instead of the identity check in =i__schedule=.
+  * Room for more classes later (deadline/EDF, etc).
+
+- *DP based batch ordering, possible fair class refinement* ::
+  EMA priority sort is greedy. Once a batch of tasks are =READY= at the same time, worth trying:
+  * Weighted scheduling to minimize total weighted completion time, using =pred= as processing time and a per task weight (Smith's rule / DP).
+  * Job sequencing with deadlines, the standard DP, if/when a deadline field gets added. Maximizes on time completions instead of just shortest predicted job first.
+  * Lives as an alternate =pick_next= inside the fair class, operating only on the current =rq= batch, not a persistent graph.
+  * If this grows into something bigger, split it into its own module like =HASHMAP= is, instead of baking it into the scheduler. Worth deciding once the class framework actually exists.
 
 - *Invariants* ::
-  * Yield is cooperative.
-  * Scheduler never preempts arbitrary code.
-  * Context representation is implementation-defined.
+  * Class order is fixed and checked top to bottom on every pick.
+  * A class returning nothing from =pick_next= means fall through to the next class, never return idle directly. Only the idle class does that.
+  * Adding a class doesn't change existing classes' observable behavior.
+
+**** Phase 7 - Preemption
+
+=Goal:= Stop infinite tasks from monopolizing a core without relying on =task_yield()=.
+
+Not timer only. Options:
+- Cross core signal: a core sends a real time signal to a worker when it decides that worker's current task should give way (e.g. a higher priority task just became =READY= there).
+- Wakeup driven: extend =i_waitqwakeone= so a wakeup doesn't just mark a task =READY=, it also checks if it should preempt =core->currt= right there, same idea as CFS's =check_preempt_curr= on every wakeup instead of only on a tick.
+- perf counter based: fire after N instructions/branches instead of wall clock time, gives reproducible preemption points for testing.
+- Compiler inserted safe points, checked opportunistically at function entry/loop back edges.
+
+Given the wakeup machinery already built in Phase 3, wakeup driven preemption is probably the most natural one to build first.
+
+- *Features* ::
+  * Preemption trigger (pick one or more of the above).
+  * Preemption safe points.
+
+- *Invariants* ::
+  * Preemption never interrupts an in progress syscall trap.
+  * Scheduler never preempts while executing in scheduler space (=shctx=).
 
 **** Phase 8 - Future Research
 
 *COMPLETELY OPTIONAL*
 
 - *Examples* ::
-  * Timer-based preemption.
+  * Timer based preemption.
   * Custom assembly context switching.
-  * *NUMA* awareness.
+  * NUMA awareness.
   * CPU affinity.
-  * Heterogeneous scheduling
-  * Hot-plugging
+  * Heterogeneous scheduling.
+  * Hot plugging.
   * Multiple schedulers communicating.
+  * Revisit dependency graphs as a userspace layer if it turns out I actually need them.
 
 *** RULES
 These are frozen unless there is a correctness issue.
