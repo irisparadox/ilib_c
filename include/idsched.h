@@ -18,6 +18,9 @@
 #include <ihstmap.h>
 #include <icontext.h>
 #include <ilisti.h>
+#include <compiler_iattr.h>
+#include <x86-64/cache.h>
+#include <ilinux/funfunc.h>
 
 #define IDSCHED_CORE_OFFLINE  (1u << 0)
 #define IDSCHED_CORE_ONLINE   (1u << 1)
@@ -31,6 +34,9 @@
 #define IDSCHED_TASK_BLOCKED  (1u << 4)
 #define IDSCHED_TASK_REAPED   (1u << 5)
 #define IDSCHED_TASK_USROWN   (1u << 6)
+
+#define ISC_TASK_ON_RQ_QUEUED    1
+#define ISC_TASK_ON_RQ_MIGRATING 2
 
 #define IDSCHED_ACPI_SIGARM   (1u << 0)
 #define IDSCHED_ACPI_SIGFRD   (1u << 1)
@@ -70,6 +76,13 @@
 #define IDSCHED_WEXITSTATUS(status) (status)
 #define IDSCHED_INVALID_TID ((ilib_uint64_t)-1)
 #define IDSCHED_IDLE_TID ((ilib_uint64_t)-2)
+
+typedef ilib_byte_t u8;
+
+struct rqi;
+struct rt_rqi;
+
+struct idsched_class;
 
 typedef struct idsched      idsched_t;
 typedef struct idsched_acpi idsched_acpi_t;
@@ -168,7 +181,11 @@ struct idsched_task {
 	idsched_t      *sched;
 	idsched_core_t *core;
 
-	ilib_uint32_t   flags;
+	unsigned int    __state;
+
+	u8		on_rq;
+
+	unsigned int    flags;
 	idsched_tid     tid;
 
 	int exitst;
@@ -208,6 +225,82 @@ struct idsched_core {
 	ilib_uint32_t   flags;
 };
 
+
+#define MAX_RT_PRIO 100
+
+#ifndef IDSCHED_SCHEDSTATS
+#define IDSCHED_SCHEDSTATS 1
+#endif  /* IDSCHED_SCHEDSTATS */
+
+struct irt_prio_array {
+	DECLARE_BITMAP(bitmap, MAX_RT_PRIO + 1); /* 1 bit for delimiter */
+	ilinode_t queue[MAX_RT_PRIO];
+};
+
+struct rt_rqi {
+	struct irt_prio_array active;
+	unsigned int          rt_nr_running;
+	int                   rt_queued;
+};
+
+struct rqi {
+	unsigned int                nr_running;
+	idsched_task_t             *curr;	/* execution ctx */
+	idsched_task_t             *idle;
+
+	/*
+	 * Next cache line will hold the hot rq lock.
+	 */
+	ilib_uint64_t               nr_switches		__i__cacheline_aligned;
+
+	pthread_mutex_t             __lock;
+
+	struct rt_rqi               rt;
+
+	idsched_task_t             *stop;
+	const struct idsched_class *next_class;
+
+#if IDSCHED_SCHEDSTATS == 1
+	unsigned int yld_count;
+
+	unsigned int sched_count;
+	unsigned int sched_goidle;
+#endif /* IDSCHED_SCHEDSTATS == 1 */
+};
+
+#define ISC_SM_IDLE (-1)
+#define ISC_SM_NONE 0
+
+struct idsched_class {
+	void (*enqueue_task) (struct rqi *rq, idsched_task_t *p, int flags);
+	bool (*dequeue_task) (struct rqi *rq, idsched_task_t *p, int flags);
+
+	void (*yield_task)   (struct rqi *rq);
+
+	idsched_task_t *(*pick_task)(struct rqi *rq);
+
+	void (*put_prev_task)(struct rqi *rq, idsched_task_t *p, idsched_task_t *next);
+	void (*set_next_task)(struct rqi *rq, idsched_task_t *p, bool first);
+
+	void (*task_tick)(struct rqi *rq, idsched_task_t *p);
+
+	void (*update_curr)(struct rqi *rq);
+};
+
+#define DEFINE_IDSCHED_CLASS(name)                   	\
+const struct idsched_class name##_sched_class		\
+	__ialigned(__alignof__(struct idsched_class))
+
+extern const struct idsched_class stop_sched_class;
+extern const struct idsched_class rt_sched_class;
+extern const struct idsched_class idle_sched_class;
+
+static const struct idsched_class *const sched_classes[] = {
+	&stop_sched_class,
+	&rt_sched_class,
+	&idle_sched_class,
+};
+
 #define IDSCHED_INVALID_CHILD ((idsched_task_t *)-1)
 
 #define IDSCHED_SYS_NONE  0
@@ -245,7 +338,7 @@ int idsched_run(idsched_t *sched);
 
 #endif /* IDSCHED_H_ */
 
-//#define IDSCHED_IMPLEMENTATION
+#define IDSCHED_IMPLEMENTATION
 #ifdef IDSCHED_IMPLEMENTATION
 #ifndef I_IDSCH_IMPL
 #define I_IDSCH_IMPL
@@ -274,10 +367,10 @@ int idsched_run(idsched_t *sched);
 
 #define I_ONEMALPHA (1.0f - IDSCHED_EMA_ALPHA)
 
-#define _I__TASK_HAS(t, f) (((t)->flags & (f)) != 0)
-#define _I__TASK_SET(t, f) ((t)->flags |= (f))
-#define _I__TASK_CLR(t, f) ((t)->flags &= ~(f))
-#define _I__TASK_TGL(t, f) ((t)->flags ^= (f))
+#define _I__TASK_HAS(t, f) (((t)->__state & (f)) != 0)
+#define _I__TASK_SET(t, f) ((t)->__state |= (f))
+#define _I__TASK_CLR(t, f) ((t)->__state &= ~(f))
+#define _I__TASK_TGL(t, f) ((t)->__state ^= (f))
 
 #define _I__TASK_MSTAT                                                  \
 	(IDSCHED_TASK_NEW | IDSCHED_TASK_READY | IDSCHED_TASK_RUNNING | \
@@ -285,9 +378,17 @@ int idsched_run(idsched_t *sched);
 
 #define _I__TASK_STSTAT(t, s)                  \
 	do {                                   \
-		(t)->flags &= ~_I__TASK_MSTAT; \
-		(t)->flags |= (s);             \
+		(t)->__state &= ~_I__TASK_MSTAT; \
+		(t)->__state |= (s);             \
 	} while (0)
+
+#define _I__TIF_NEED_RESCHED (1u << 3)
+
+#define i_tif_need_resched(t) \
+	((t)->flags & _I__TIF_NEED_RESCHED)
+
+#define schedstat_enabled()	iunlikely(IDSCHED_SCHEDSTATS)
+#define schedstat_inc(var)	do { if (schedstat_enabled()) { var++; } } while (0)
 
 static pthread_key_t i_core_key;
 
@@ -420,12 +521,37 @@ static idsched_task_t *i_reaper_dequeue(ireaper *r);
 static void            i_reaper_adopt(ireaper *r, idsched_task_t *t);
 static void           *i_reaper_main(void *arg);
 
+static int  i_need_resched(void);
 static void i_schedule(void);
-static void i__schedule_loop(idsched_core_t *core);
-static void i__schedule(idsched_core_t *core, idsched_task_t *prev);
+static void i__schedule_loop(int sched_mode);
+static void i__schedule(int sched_mode);
 static void i_sched_entry(idsched_task_t *t);
 static void i_task_entry(idsched_task_t *t);
 
+static bool            dequeue_task_idle(struct rqi *rq, idsched_task_t *p, int flags);
+static idsched_task_t *pick_task_idle(struct rqi *rq);
+static void            put_prev_task_idle(struct rqi *rq, idsched_task_t *prev, idsched_task_t *next);
+static void            set_next_task_idle(struct rqi *rq, idsched_task_t *next, bool first);
+static void            task_tick_idle(struct rqi *rq, idsched_task_t *curr);
+static void            update_curr_idle(struct rqi *rq);
+
+static void            enqueue_task_stop(struct rqi *rq, idsched_task_t *p, int flags);
+static bool            dequeue_task_stop(struct rqi *rq, idsched_task_t *p, int flags);
+static void            yield_task_stop(struct rqi *rq);
+static idsched_task_t *pick_task_stop(struct rqi *rq);
+static void            put_prev_task_stop(struct rqi *rq, idsched_task_t *p, idsched_task_t *next);
+static void            set_next_task_stop(struct rqi *rq, idsched_task_t *p, bool first);
+static void            task_tick_stop(struct rqi *rq, idsched_task_t *p);
+static void            update_curr_stop(struct rqi *rq);
+
+static void            enqueue_task_rt(struct rqi *rq, idsched_task_t *p, int flags);
+static bool            dequeue_task_rt(struct rqi *rq, idsched_task_t *p, int flags);
+static void            yield_task_rt(struct rqi *rq);
+static idsched_task_t *pick_task_rt(struct rqi *rq);
+static void            put_prev_task_rt(struct rqi *rq, idsched_task_t *p, idsched_task_t *next);
+static void            set_next_task_rt(struct rqi *rq, idsched_task_t *p, bool first);
+static void            task_tick_rt(struct rqi *rq, idsched_task_t *p);
+static void            update_curr_rt(struct rqi *rq);
 
 static int idle_swapper_loop(void *arg)
 {
@@ -682,6 +808,36 @@ static void *i_reaper_main(void *arg)
 
 /* Main loop */
 
+static inline int task_on_rq_queued(idsched_task_t *p)
+{
+	return IREAD_ONCE(u8, p->on_rq) == ISC_TASK_ON_RQ_QUEUED;
+}
+
+static inline bool sched_stop_runnable(struct rqi *rq)
+{
+	return rq->stop && task_on_rq_queued(rq->stop);
+}
+
+static inline bool sched_rt_runnable(struct rqi *rq)
+{
+	return rq->rt.rt_queued > 0;
+}
+
+static inline void add_nr_running(struct rqi *rq, unsigned count)
+{
+	rq->nr_running += count;
+}
+
+static inline void sub_nr_running(struct rqi *rq, unsigned count)
+{
+	rq->nr_running -= count;
+}
+
+static int i_need_resched(void)
+{
+	return iunlikely(i_tif_need_resched(i_core_self()->currt));
+}
+
 /*
  * i__schedule() is the main scheduler function.
  *
@@ -701,18 +857,22 @@ static void *i_reaper_main(void *arg)
  *    This means tasks are executed from beginning to end, that is if the
  *    task doesn't yield.
  */
-static void i__schedule(idsched_core_t *core, idsched_task_t *prev)
+static void i__schedule(int sched_mode)
 {
-	idsched_task_t *next;
+	idsched_task_t *prev, *next;
+	char preempt = sched_mode > ISC_SM_NONE;
 	char is_switch;
 	unsigned long *switch_count;
 	unsigned long prev_state;
+	struct rqi *rq;
+	idsched_core_t *core = i_core_self();
+	prev = core->currt;
 
 	pthread_mutex_lock(&core->lck);
 	pthread_mutex_lock(&prev->lck);
 
 	switch_count = &prev->nivcsw;
-	prev_state = prev->flags;
+	prev_state = prev->__state;
 
 	if (prev == &core->idle) {
 		if (pqueue_empty(&core->rq)) {
@@ -777,16 +937,16 @@ stopping:
 	abort();
 }
 
-static inline void i__schedule_loop(idsched_core_t *core)
+static inline void i__schedule_loop(int sched_mode)
 {
 	do {
-		i__schedule(core, core->currt);
-	} while (0);
+		i__schedule(sched_mode);
+	} while (i_need_resched());
 }
 
 static inline void i_schedule(void)
 {
-	i__schedule_loop(i_core_self());
+	i__schedule_loop(ISC_SM_NONE);
 }
 
 /*
@@ -1660,6 +1820,7 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->core     = NULL;
 	_I__TASK_STSTAT(t, IDSCHED_TASK_NEW);
 	_I__TASK_SET(t, IDSCHED_TASK_USROWN);
+	t->flags    = 0;
 	t->exitst   = 0;
 	t->rt       = 0;
 	t->pred     = 0;
@@ -1921,6 +2082,134 @@ int idsched_run(idsched_t *sched)
 
 	return 0;
 }
+
+/* SCHEDULER CLASSES */
+
+static void put_prev_task_idle(struct rqi *rq, idsched_task_t *prev, idsched_task_t *next)
+{
+	(void)prev;
+	(void)next;
+	update_curr_idle(rq);
+}
+
+static void set_next_task_idle(struct rqi *rq, idsched_task_t *next, bool first)
+{
+	(void)next;
+	(void)first;
+	schedstat_inc(rq->sched_goidle);
+}
+
+idsched_task_t *pick_task_idle(struct rqi *rq)
+{
+	return rq->idle;
+}
+
+static bool dequeue_task_idle(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	(void)rq;
+	(void)p;
+	(void)flags;
+#if IDSCHED_DEBUG == 1
+	printf("[ERR_SCHED]: Scheduling from idle task\n");
+#endif
+	return true;
+}
+
+static void task_tick_idle(struct rqi *rq, idsched_task_t *curr)
+{
+	(void)curr;
+	update_curr_idle(rq);
+}
+
+static void update_curr_idle(struct rqi *rq)
+{
+	(void)rq;
+}
+
+DEFINE_IDSCHED_CLASS(idle) = {
+	.dequeue_task		= dequeue_task_idle,
+
+	.pick_task		= pick_task_idle,
+	.put_prev_task		= put_prev_task_idle,
+	.set_next_task		= set_next_task_idle,
+
+	.task_tick		= task_tick_idle,
+
+	.update_curr		= update_curr_idle,
+};
+
+static void set_next_task_stop(struct rqi *rq, idsched_task_t *p, bool first)
+{
+	(void)rq;
+	(void)p;
+	(void)first;
+}
+
+static idsched_task_t *pick_task_stop(struct rqi *rq)
+{
+	if (!sched_stop_runnable(rq))
+		return NULL;
+
+	return rq->stop;
+}
+
+static void enqueue_task_stop(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	(void)flags;
+	(void)p;
+	add_nr_running(rq, 1);
+}
+
+static bool dequeue_task_stop(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	(void)p;
+	(void)flags;
+	sub_nr_running(rq, 1);
+	return true;
+}
+
+static void yield_task_stop(struct rqi *rq)
+{
+	(void)rq;
+	BUG();
+}
+
+static void put_prev_task_stop(struct rqi *rq, idsched_task_t *p, idsched_task_t *next)
+{
+	// TODO update_curr_common
+	(void)rq;
+	(void)p;
+	(void)next;
+}
+
+static void task_tick_stop(struct rqi *rq, idsched_task_t *p)
+{
+	(void)rq;
+	(void)p;
+}
+
+static void update_curr_stop(struct rqi *rq)
+{
+	(void)rq;
+}
+
+DEFINE_IDSCHED_CLASS(stop) = {
+	.enqueue_task		= enqueue_task_stop,
+	.dequeue_task		= dequeue_task_stop,
+	.yield_task		= yield_task_stop,
+
+	.pick_task		= pick_task_stop,
+	.put_prev_task		= put_prev_task_stop,
+	.set_next_task		= set_next_task_stop,
+
+	.task_tick		= task_tick_stop,
+
+	.update_curr		= update_curr_stop,
+};
+
+DEFINE_IDSCHED_CLASS(rt) = {
+
+};
 
 #endif /* I_IDSCH_IMPL */
 #endif /* IDSCHED_IMPLEMENTATION */

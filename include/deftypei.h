@@ -20,6 +20,12 @@ typedef unsigned char  ilib_byte_t;
 typedef signed long    ilib_intptr_t;
 typedef unsigned long  ilib_uintptr_t;
 
+#ifndef bool
+#define bool  _Bool
+#define true  1
+#define false 0
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 #define ILIB_OFFSETOF(type, member) \
 	__builtin_offsetof(type, member)
@@ -43,5 +49,15 @@ typedef unsigned long  ilib_uintptr_t;
 #define ilikely(x)	(x)
 #define iunlikely(x)	(x)
 #endif /* defined(__GNUC__) || defined(__clang__) */
+
+#define CHAR_BIT 8
+
+#define BITS_PER_BYTE CHAR_BIT
+#define BITS_PER_TYPE(type) (sizeof(type) * BITS_PER_BYTE)
+#define __ILIB_DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
+#define BITS_TO_LONGS(nr) \
+	__ILIB_DIV_ROUND_UP(nr, BITS_PER_TYPE(long))
+#define DECLARE_BITMAP(name, bits) \
+	unsigned long name[BITS_TO_LONGS(bits)]
 
 #endif /* DEFTYPEI_H */

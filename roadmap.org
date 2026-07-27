@@ -2,8 +2,6 @@
 
 * SCHEDULER
 *** ABSTRACT
-**** Scheduler Design Goals
-
 I want each worker thread managed by the scheduler to represent a CPU core. Each core has its own unique ID, its own run queue, and can be brought online or shut down independently. Every core executes an infinite scheduling loop, continuously selecting and executing tasks. A task may either complete normally or run indefinitely, mirroring how a real operating system schedules threads.
 
 Tasks should be prioritized, although the exact scheduling policy is still to be determined. Since the user cannot accurately predict a task's execution time beforehand, the scheduler should include a runtime predictor. Whenever a task completes, its measured execution time should be fed back into the predictor so that future instances of the same task can be scheduled more intelligently.
@@ -114,7 +112,33 @@ The exact policy for combining local and global predictions is intentionally lef
 - *Known limitations* ::
   * Stack relocation on fork (=i_relocate_stack= / =i_fix_frame_chain=) is a best effort pointer scan, not COW. x86-64 only, assumes frame pointer based stacks.
 
-**** Phase 4 - Core Management
+**** Phase 4 - Scheduler Classes
+
+=Goal:= Replace the single hardcoded priority policy with a layered class system. Each core picks a task by walking classes in a fixed order, idle stays structurally excluded, same as Phase 3, it's never a candidate in a queue, only the fallback when nothing else is runnable.
+
+- *Features* ::
+  * =sched_class= vtable: =pick_next=, =enqueue=, =dequeue=, =task_tick= (for later preemption work).
+  * Replace =core->rq= (currently a bare =pqueue_t=) with a real =rq= struct owning one sub runqueue per class, e.g. =fair_rq= (the current =pqueue_t=, unchanged), =stop_rq= (single pending task slot, no ordering needed). Idle needs no storage at all, its =pick_next= just returns =core->idle= directly.
+  * Current EMA priority logic moves into a =fair= class, backed by =fair_rq=, unchanged behavior.
+  * Idle becomes its own class whose =pick_next= always returns =core->idle= and whose =enqueue= is a no op. Makes the "idle never enters =rq=" rule enforced by the class itself instead of the identity check in =i__schedule=.
+  * =stop= class, highest priority in the walk order, empty until something needs to force a core. This is the class that will carry ACPI driven core shutdown in Phase 5: instead of setting =IDSCHED_CORE_STOPPING= and waiting for the core to notice on its own idle path, a stop class task gets enqueued into =stop_rq= and picked ahead of everything else the next time =i__schedule= runs, same as Linux's stopper thread being the highest priority runnable thing on the target CPU.
+  * Room for more classes later (deadline/EDF, etc), each with its own sub runqueue if needed.
+
+- *DP based batch ordering, possible fair class refinement* ::
+  EMA priority sort is greedy. Once a batch of tasks are =READY= at the same time, worth trying:
+  * Weighted scheduling to minimize total weighted completion time, using =pred= as processing time and a per task weight (Smith's rule / DP).
+  * Job sequencing with deadlines, the standard DP, if/when a deadline field gets added. Maximizes on time completions instead of just shortest predicted job first.
+  * Lives as an alternate =pick_next= inside the fair class, operating only on the current =fair_rq= batch, not a persistent graph.
+  * If this grows into something bigger, split it into its own module like =HASHMAP= is, instead of baking it into the scheduler. Worth deciding once the class framework actually exists.
+
+- *Invariants* ::
+  * Class order is fixed and checked top to bottom on every pick.
+  * A class returning nothing from =pick_next= means fall through to the next class, never return idle directly. Only the idle class does that.
+  * Adding a class doesn't change existing classes' observable behavior.
+  * A =stop= class task, once enqueued, is picked before any =fair= or =idle= task on that core.
+  * Each class owns and manages its own sub runqueue; no class reaches into another class's storage directly.
+
+**** Phase 5 - Core Management
 
 =Goal:= Treat cores like CPUs.
 
@@ -122,16 +146,16 @@ The exact policy for combining local and global predictions is intentionally lef
   * Core shutdown / startup / states.
   * Bootstrap core management.
   * ACPI watcher thread.
-  * Signal driven bootstrap shutdown.
+  * Core shutdown implemented as a =stop= class task, not a flag checked only from the idle path.
 
 - *Invariants* ::
   * Shutting down a core never loses tasks.
-  * The currently running task finishes before the core shuts down.
+  * The currently running task finishes before the core shuts down. The ACPI request never interrupts =i__schedule= or the currently running task directly, it only enqueues a =stop= class task and lets the normal pick happen on the core's next trip through the scheduler.
   * =READY= tasks are migrated before the worker thread exits.
   * No hot plugging.
-  * Core 0 can only be shut down via signaling the ACPI.
+  * Core 0 can only be shut down via the =stop= class path triggered by the ACPI watcher.
 
-**** Phase 5 - Task Migration
+**** Phase 6 - Task Migration
 
 =Goal:= Move work between cores.
 
@@ -146,28 +170,6 @@ The exact policy for combining local and global predictions is intentionally lef
 - *Future policies* ::
   * Work stealing, load balancing, migration heuristics.
 
-**** Phase 6 - Scheduler Classes
-
-=Goal:= Replace the single hardcoded priority policy with a layered class system. Each core picks a task by walking classes in a fixed order (e.g. stop, deadline, realtime, fair, idle). Idle stays structurally excluded, same as Phase 3, it's never a candidate in a queue, only the fallback when nothing else is runnable.
-
-- *Features* ::
-  * =sched_class= vtable: =pick_next=, =enqueue=, =dequeue=, =task_tick= (for later preemption work).
-  * Current EMA priority logic moves into a =fair= class, unchanged in behavior.
-  * Idle becomes its own class whose =pick_next= always returns =core->idle= and whose =enqueue= is a no op. Makes the "idle never enters =rq=" rule enforced by the class itself instead of the identity check in =i__schedule=.
-  * Room for more classes later (deadline/EDF, etc).
-
-- *DP based batch ordering, possible fair class refinement* ::
-  EMA priority sort is greedy. Once a batch of tasks are =READY= at the same time, worth trying:
-  * Weighted scheduling to minimize total weighted completion time, using =pred= as processing time and a per task weight (Smith's rule / DP).
-  * Job sequencing with deadlines, the standard DP, if/when a deadline field gets added. Maximizes on time completions instead of just shortest predicted job first.
-  * Lives as an alternate =pick_next= inside the fair class, operating only on the current =rq= batch, not a persistent graph.
-  * If this grows into something bigger, split it into its own module like =HASHMAP= is, instead of baking it into the scheduler. Worth deciding once the class framework actually exists.
-
-- *Invariants* ::
-  * Class order is fixed and checked top to bottom on every pick.
-  * A class returning nothing from =pick_next= means fall through to the next class, never return idle directly. Only the idle class does that.
-  * Adding a class doesn't change existing classes' observable behavior.
-
 **** Phase 7 - Preemption
 
 =Goal:= Stop infinite tasks from monopolizing a core without relying on =task_yield()=.
@@ -178,7 +180,7 @@ Not timer only. Options:
 - perf counter based: fire after N instructions/branches instead of wall clock time, gives reproducible preemption points for testing.
 - Compiler inserted safe points, checked opportunistically at function entry/loop back edges.
 
-Given the wakeup machinery already built in Phase 3, wakeup driven preemption is probably the most natural one to build first.
+Given the wakeup machinery already built in Phase 3, and the class framework from Phase 4, wakeup driven preemption checked against class/priority order is probably the most natural one to build first.
 
 - *Features* ::
   * Preemption trigger (pick one or more of the above).
@@ -201,7 +203,7 @@ Given the wakeup machinery already built in Phase 3, wakeup driven preemption is
   * Hot plugging.
   * Multiple schedulers communicating.
   * Revisit dependency graphs as a userspace layer if it turns out I actually need them.
-
+  * COW support instead of rudimentary stack scan.
 *** RULES
 These are frozen unless there is a correctness issue.
 1. Every phase must compile before the next begins.
@@ -209,7 +211,6 @@ These are frozen unless there is a correctness issue.
 3. No optimization before correctness within a phase.
 4. Each phase has clear invariants that must never be violated.
 5. If a new idea appears; it is assigned to the earliest phase it naturally belongs to (or to Phase 8 if it is purely experimental).
-
 
 *** Notes:
 **** Basic tasks priorities
@@ -221,7 +222,8 @@ their creation sequence number (tid) so scheduling remains deterministic.
 Priority is computed exactly once when a task transitions into READY and
 never changes afterwards.
 
-** Implementation [24/24]
+
+** Implementation [34/34]
 *** Phase 0 - Core Architecture [6/6]
 **** DONE Scheduler data structures
 - [X] Implement =idsched_t=
@@ -319,6 +321,53 @@ never changes afterwards.
 - [X] Verify predictor updates occur only on completion.
 **** DONE Tag release
 - [X] Create idsched-v0.2.0 tag.
+
+*** Phase 3 - Dynamic Task Graph [10/10]
+**** DONE Design the syscall trap model
+ - [X] Define syscall dispatch mechanism (=sc_nr= / =sc_arg= / =sc_ret=).
+ - [X] Decide scheduler space stack (=shctx=) semantics.
+ - [X] Document syscall return code contract (=ISC_WECHILD= / =ISC_WNOWAIT= / =ISC_WREAPED=).
+**** DONE Extend task metadata
+- [X] Add parent/child fields (=prnt=, =children=, =sibling=).
+- [X] Add wait queue fields (=wait_chldexit=, =wait=).
+- [X] Add ownership flag (=IDSCHED_TASK_USROWN=).
+- [X] Add syscall trap fields (=sc_nr=, =sc_arg=, =sc_ret=).
+**** DONE Implement task_fork()
+- [X] Duplicate user context and stack.
+- [X] Duplicate scheduler space context and stack.
+- [X] Relocate stack pointers referencing the parent's stack or task struct.
+- [X] Fix frame pointer chain after relocation.
+- [X] Handle allocation failure without partial state.
+- [X] Enqueue child as =READY= on the parent's core.
+**** DONE Implement task_exec()
+- [X] Replace entry point/context via fresh =imakecontext=.
+- [X] Preserve task identity and parent/child relationships.
+**** DONE Implement wait() / waittask()
+- [X] Implement wait queue add/remove (=i_waitqadd= / =i_waitqremove=).
+- [X] Implement =i_wait_consider_task= / =i_do_wait_task=.
+- [X] Implement blocking loop in =i_do_wait=.
+- [X] Implement wakeup (=i_waitqwakeone=).
+- [X] Support waiting on a specific child (=wait4=) and any child (=wait=).
+**** DONE Implement exit()
+- [X] Set =IDSCHED_TASK_DONE= and store exit status.
+- [X] Reparent orphaned children to the reaper.
+- [X] Notify waiting parent via wait queue wakeup.
+- [X] Enqueue self to reaper when unowned/orphaned.
+**** DONE Implement reaper thread
+- [X] Zombie queue with condition wait.
+- [X] Orphan adoption (=i_reaper_adopt=).
+- [X] Poison pill shutdown path.
+**** DONE Idle task correctness
+- [X] Exclude idle from the run queue by identity.
+- [X] Exclude idle from wait/fork/exec paths.
+**** DONE Testing
+- [X] Verify fork copies stack and locals correctly.
+- [X] Verify parent/child run on independent stacks.
+- [X] Verify wait blocks until child exits.
+- [X] Verify multiple children get reaped correctly.
+- [X] Verify orphan reparenting to the reaper.
+**** DONE Tag release
+- [X] Create idsched-v0.3.0 tag.
 
 
 * HASHMAP
