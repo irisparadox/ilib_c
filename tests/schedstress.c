@@ -26,7 +26,7 @@ static int nestedforktask(void *arg)
 	chld = idsched_task_fork();
 	if (chld == NULL) {
 		/* grandchild */
-		idsched_task_exec(leafwork, (void *)(ilib_intptr_t)(base * 10 + 1));
+		idsched_task_exec(leafwork, (void *)(ilib_intptr_t)(base + 100));
 		/* unreachable */
 	} else if (chld == IDSCHED_INVALID_CHILD) {
 		printf("nestedforktask[%d]: fork failed\n", base);

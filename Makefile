@@ -1,5 +1,6 @@
 CC = gcc
-CFLAGS = -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -Iinclude -Iarch -Wall -Wextra -std=c99 -pedantic -pthread -g3 -O0
+CFLAGS = -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -Iinclude -Iarch -Wall -Wextra -std=c99 -pedantic -pthread
+DEBUGF = -fsanitize=address,undefined -fno-omit-frame-pointer -g3 -O0
 
 TARGET = out/main
 
@@ -20,13 +21,13 @@ out:
 	mkdir -p out
 
 $(GENOFFSETS): buildtools/genoffsets.c | out
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $(DEBUGF) $< -o $@
 
 $(ASMOFFSETS): $(GENOFFSETS) include/icontext.h arch/x86-64/i_context.h
 	$(GENOFFSETS) > $@
 
 $(TARGET): $(SRC) $(ASMOFFSETS) | out
-	$(CC) $(CFLAGS) $(SRC) -o $@
+	$(CC) $(CFLAGS) $(DEBUGF) $(SRC) -o $@
 
 clean:
 	rm -rf out

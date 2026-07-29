@@ -498,6 +498,8 @@ static idsched_task_t *i_reaper_dequeue(ireaper *r);
 static void            i_reaper_adopt(ireaper *r, idsched_task_t *t);
 static void           *i_reaper_main(void *arg);
 
+static inline void i_set_cpu_online(idsched_core_t *cpu);
+
 static inline void i_set_tsk_reaped(idsched_task_t *t);
 static inline void i_set_tsk_usrown(idsched_task_t *t);
 
@@ -547,6 +549,7 @@ static void            update_curr_rt(struct rqi *rq);
 
 static void cpurq_rt_prepare(struct rt_rqi *rt);
 static struct rqi *cpurq_prepare(void);
+static void cpu_submit_online(void);
 static void cpurq_dispose(struct rqi *rq);
 
 static void cpu_idle_prepare(void);
@@ -1111,6 +1114,20 @@ static struct rqi *cpurq_prepare(void)
 	return rq;
 }
 
+static inline void i_set_cpu_online(idsched_core_t *cpu)
+{
+	cpu->flags = IDSCHED_CORE_ONLINE;
+}
+
+static void cpu_submit_online(void)
+{
+	idsched_core_t *cpu = i_core_self();
+	pthread_mutex_lock(&cpu->lck);
+	i_set_cpu_online(cpu);
+	pthread_cond_signal(&cpu->cv);
+	pthread_mutex_unlock(&cpu->lck);
+}
+
 static void cpurq_dispose(struct rqi *rq)
 {
 	if (iunlikely(rq == NULL))
@@ -1128,6 +1145,7 @@ static void cpurq_dispose(struct rqi *rq)
 static void i_core_run(void)
 {
 	cpu_idle_prepare();
+	cpu_submit_online();
 	while (1)
 		i_do_idle();
 }
@@ -1515,6 +1533,17 @@ static long i_sys_fork(idsched_task_t *t)
 	chld->exitst = 0;
 	chld->ctx.ic_link = &chld->shctx;
 
+	chld->sched_class = prnt->sched_class;
+	chld->on_rq = ISC_TASK_ON_RQ_NONE;
+
+	chld->exec_start = 0;
+	chld->sum_exec_runtime = 0;
+
+	ilisti_init(&chld->run_list);
+	chld->flags = 0;
+	chld->__state = 0;
+	_I__TASK_STSTAT(chld, IDSCHED_TASK_NEW);
+
 	chld->sc_nr  = IDSCHED_SYS_NONE;
 
 	prnt->sc_ret = (long)chld;
@@ -1586,8 +1615,10 @@ static void i_exit_notify(idsched_task_t *t)
 
 	if (t->prnt != NULL)
 		i_waitqwakeone(&t->prnt->wait_chldexit, t);
-	else if (!i_tif_usrown(t))
+	else if (!i_tif_usrown(t)) {
+		ilisti_remove(&t->sibling);
 		i_reaper_enqueue(&t->sched->reaper, t);
+	}
 }
 
 static long i_sys_exit(idsched_task_t *t)
@@ -1728,14 +1759,20 @@ int idsched_core_startup(idsched_t *sched, ilib_size_t n)
 			continue;
 		}
 
-		core->flags = IDSCHED_CORE_ONLINE;
-
 		if (pthread_create(&core->thread, NULL, i_core_worker, core) != 0) {
 			continue;
 		}
 #if IDSCHED_DEBUG == 1
 		printf("[DEBUG_SCHED]: BOOTSTRAP awaken Worker Core [%zu]%p", i, core);
 #endif
+
+		pthread_mutex_lock(&core->lck);
+
+		while (!(core->flags & IDSCHED_CORE_ONLINE))
+			pthread_cond_wait(&core->cv, &core->lck);
+
+		pthread_mutex_unlock(&core->lck);
+
 		++sched->online;
 		++started;
 	}
@@ -1822,6 +1859,7 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->prnt     = NULL;
 	t->sched    = sch;
 	t->core     = NULL;
+	t->__state  = 0;
 	_I__TASK_STSTAT(t, IDSCHED_TASK_NEW);
 	i_set_tsk_usrown(t);
 	t->exitst   = 0;
