@@ -75,6 +75,7 @@
 #define IDSCHED_WEXITSTATUS(status) (status)
 #define IDSCHED_INVALID_TID ((ilib_uint64_t)-1)
 #define IDSCHED_IDLE_TID ((ilib_uint64_t)-2)
+#define IDSCHED_STOP_TID ((ilib_uint64_t)-3)
 
 typedef ilib_byte_t   u8;
 typedef ilib_uint64_t u64;
@@ -183,8 +184,8 @@ struct idsched_task {
 
 	const struct idsched_class *sched_class;
 
-	ilib_uint64_t               nivcsw;
-	ilib_uint64_t               nvcsw;
+	u64                         nivcsw;
+	u64                         nvcsw;
 
 	pthread_mutex_t             lck;
 	pthread_cond_t              cv;
@@ -198,8 +199,6 @@ struct idsched_core {
 	idsched_t       *sched;
 	ilib_size_t      id;
 
-	icontext_t       bootctx;
-
 	pthread_t        thread;
 
 	pthread_mutex_t  lck;
@@ -212,6 +211,7 @@ struct idsched_core {
 
 
 #define MAX_RT_PRIO 100
+#define MAX_PRIO    140
 
 #ifndef IDSCHED_SCHEDSTATS
 #define IDSCHED_SCHEDSTATS 1
@@ -302,6 +302,12 @@ static const struct idsched_class *const sched_classes[] = {
 #define ISC_WSUCCSS  1
 #define ISC_WREAPED  2
 
+#define CPUEBUSY  1
+#define CPUEAGAIN 2
+#define CPUEAVAIL 3
+
+#define CPUSHUTOK 0
+
 #define IDSCHED_DISPATCH_CONTINUE 0
 #define IDSCHED_DISPATCH_STOP     1
 
@@ -324,7 +330,7 @@ int idsched_run(idsched_t *sched);
 
 #endif /* IDSCHED_H_ */
 
-#define IDSCHED_IMPLEMENTATION
+//#define IDSCHED_IMPLEMENTATION
 #ifdef IDSCHED_IMPLEMENTATION
 #ifndef I_IDSCH_IMPL
 #define I_IDSCH_IMPL
@@ -513,6 +519,7 @@ static void i__schedule(int sched_mode);
 static void i_sched_entry(idsched_task_t *t);
 static void i_task_entry(idsched_task_t *t);
 
+static int  rq_is_running(struct rqi *rq);
 static void i_ttwu_do_activate(struct rqi *rq, idsched_task_t *p, int flags);
 static int  i_try_to_wake_up(idsched_task_t *p, unsigned state);
 static void i_wake_up_new_task(idsched_task_t *p);
@@ -552,8 +559,15 @@ static struct rqi *cpurq_prepare(void);
 static void cpu_submit_online(void);
 static void cpurq_dispose(struct rqi *rq);
 
+static inline bool cpu_is_online(idsched_core_t *cpu);
+static inline bool cpu_is_offline(idsched_core_t *cpu);
+static void cpu_stop_prepare(void);
 static void cpu_idle_prepare(void);
 static void i_do_idle(void);
+static void idle_play_dead(void);
+static int  cpu_down(idsched_core_t *cpu);
+static void cpu_do_stopper(void);
+static void cpurq_migrate(void);
 
 static int i_dispatch_schedcall(idsched_task_t *t)
 {
@@ -909,6 +923,12 @@ static idsched_task_t *pick_next_task(struct rqi *rq)
 	abort();
 }
 
+static int rq_is_running(struct rqi *rq)
+{
+	return rq->nr_running > 0;
+}
+
+
 /*
  * Enqueues p on run-queue, wake the core if it was idle.
  */
@@ -1119,6 +1139,16 @@ static inline void i_set_cpu_online(idsched_core_t *cpu)
 	cpu->flags = IDSCHED_CORE_ONLINE;
 }
 
+static inline bool cpu_is_online(idsched_core_t *cpu)
+{
+	return IREAD_ONCE(unsigned, cpu->flags) & IDSCHED_CORE_ONLINE;
+}
+
+static inline bool cpu_is_offline(idsched_core_t *cpu)
+{
+	return IREAD_ONCE(unsigned, cpu->flags) & IDSCHED_CORE_OFFLINE;
+}
+
 static void cpu_submit_online(void)
 {
 	idsched_core_t *cpu = i_core_self();
@@ -1132,6 +1162,15 @@ static void cpurq_dispose(struct rqi *rq)
 {
 	if (iunlikely(rq == NULL))
 		return;
+
+	free(rq->stop->shctx.ic_stack.ss_sp);
+	pthread_mutex_destroy(&rq->stop->lck);
+	pthread_cond_destroy(&rq->stop->cv);
+	free(rq->stop);
+
+	pthread_mutex_destroy(&rq->idle->lck);
+	pthread_cond_destroy(&rq->idle->cv);
+	free(rq->idle);
 
 	pthread_mutex_destroy(&rq->__lock);
 	free(rq);
@@ -1158,12 +1197,8 @@ static void *i_core_worker(void *arg)
 	core = (idsched_core_t *)arg;
 	pthread_setspecific(i_core_key, core);
 
+	cpu_stop_prepare();
 	i_core_run();
-
-	/* TODO:
-	 * Perform worker shutdown:
-	 *   - migrate queued tasks
-	 * */
 
 	return NULL;
 }
@@ -1580,6 +1615,8 @@ static long i_sys_yield(idsched_task_t *t)
 #if IDSCHED_DEBUG == 1
 	printf("[DEBUG_SCHED]: YIELD tid=%zu task=%p core=%p\n", t->tid, (void *)t, (void *)t->core);
 #endif
+	struct rqi *rq = task_rq(t);
+	t->sched_class->yield_task(rq);
 
 	t->sc_ret = 0;
 	return 0;
@@ -1824,9 +1861,8 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 		core->flags |= IDSCHED_CORE_STOPPING;
 		pthread_mutex_unlock(&sched->lck);
 
-		pthread_mutex_lock(&core->lck);
-		pthread_cond_signal(&core->cv);
-		pthread_mutex_unlock(&core->lck);
+		if (cpu_down(core) != CPUSHUTOK)
+			continue;
 #if IDSCHED_DEBUG == 1
 		printf("        -   Worker Core %p\n", core);
 		printf("        -   thread %zu waiting for join()\n", core->thread);
@@ -1836,7 +1872,6 @@ int idsched_core_shutdown(idsched_t *sched, ilib_size_t n)
 		printf("        [X] Worker Core %p joined\n", core);
 #endif
 		pthread_mutex_lock(&sched->lck);
-		core->flags = IDSCHED_CORE_OFFLINE;
 		--sched->online;
 		pthread_mutex_unlock(&sched->lck);
 #if IDSCHED_DEBUG == 1
@@ -2145,14 +2180,11 @@ static void cpu_idle_prepare(void)
 	/* we can't go on with initialization if idle can't be allocated */
 
 	idsched_task_t *idle = rq->idle;
-
-	memset(idle, 0, sizeof(idsched_task_t));
-
 	idle->sched = core->sched;
 	idle->core  = core;
 
 	idle->tid   = IDSCHED_IDLE_TID;
-	idle->prio  = 0;
+	idle->prio  = MAX_PRIO - 1;
 
 	idle->sched_class = &idle_sched_class;
 	idle->flags = 0;
@@ -2160,17 +2192,14 @@ static void cpu_idle_prepare(void)
 	ilisti_init(&idle->children);
 	ilisti_init(&idle->sibling);
 	ilisti_init(&idle->run_list);
-
 	ilisti_init(&idle->wait.node);
-	idle->wait.task = idle;
-
 	ilisti_init(&idle->wait_chldexit.head);
 
-	pthread_mutex_init(&idle->wait_chldexit.lck, NULL);
 	pthread_mutex_init(&idle->lck, NULL);
 	pthread_cond_init(&idle->cv, NULL);
 
-	rq->curr = idle;
+	rq->curr    = idle;
+	idle->on_rq = ISC_TASK_ON_RQ_QUEUED;
 }
 
 static void i_do_idle(void)
@@ -2178,8 +2207,8 @@ static void i_do_idle(void)
 	idsched_core_t *cpu = i_core_self();
 	struct rqi *rq = cpu_rq();
 
-	if (cpu->flags & IDSCHED_CORE_STOPPING) {
-		/* todo jump to core shutdown */
+	if (cpu_is_offline(cpu)) {
+		idle_play_dead();
 	}
 
 	while(!i_need_resched()) {
@@ -2187,6 +2216,11 @@ static void i_do_idle(void)
 	}
 
 	i_schedule_idle();
+}
+
+static void idle_play_dead(void)
+{
+	pthread_exit(0);
 }
 
 static void put_prev_task_idle(struct rqi *rq, idsched_task_t *prev, idsched_task_t *next)
@@ -2241,6 +2275,98 @@ DEFINE_IDSCHED_CLASS(idle) = {
 
 	.update_curr		= update_curr_idle,
 };
+
+/* stop class */
+static void cpu_stop_prepare(void)
+{
+	struct rqi *rq = cpu_rq();
+	idsched_core_t *cpu = i_core_self();
+
+	rq->stop = calloc(1, sizeof(idsched_task_t));
+	if (iunlikely(rq->stop == NULL))
+		BUG();
+	/* Stop needs to work, if not, this is fatal.  */
+
+	idsched_task_t *stop = rq->stop;
+
+	stop->shctx.ic_stack.ss_sp = malloc(IDSCHED_STCK_SIZE);
+	if (iunlikely(stop->shctx.ic_stack.ss_sp == NULL)) {
+		free(stop);
+		BUG(); /* again, not cool...  */
+	}
+
+	stop->shctx.ic_stack.ss_size  = IDSCHED_STCK_SIZE;
+	stop->shctx.ic_stack.ss_flags = 0;
+	stop->shctx.ic_link = NULL;
+
+	/* very unlikely to fail */
+	if (iunlikely(igetcontext(&stop->shctx) != 0)) {
+		free(stop->shctx.ic_stack.ss_sp);
+		free(stop);
+		BUG();
+	}
+
+	stop->fn   = NULL; /* We don't need this, just like idle.  */
+	stop->arg  = NULL;
+	stop->prnt = NULL;
+
+	stop->sched = cpu->sched;
+	stop->core  = cpu;
+
+	/* technically calloc already does this,
+           but let's just make it explicit.  */
+	stop->__state = IDSCHED_TASK_BLOCKED;
+	stop->on_rq   = ISC_TASK_ON_RQ_NONE;
+	stop->flags   = 0;
+	stop->tid     = IDSCHED_STOP_TID;
+	stop->prio    = -1;
+
+	stop->sched_class = &stop_sched_class;
+
+	pthread_mutex_init(&stop->lck, NULL);
+	pthread_cond_init(&stop->cv, NULL);
+
+	/* Technically stop shouldn't have children ever but,
+           we just make sure this is initialized :)  */
+	ilisti_init(&stop->children);
+	ilisti_init(&stop->sibling);
+	ilisti_init(&stop->wait_chldexit.head);
+	ilisti_init(&stop->wait.node);
+	ilisti_init(&stop->run_list);
+
+	imakecontext(&stop->shctx, cpu_do_stopper, 0);
+}
+
+static int cpu_down(idsched_core_t *cpu)
+{
+	struct rqi *rq = cpu->rq;
+
+	if (rq_is_running(rq)) /* TODO we don't have migration yet so...  */
+		return -CPUEBUSY;
+
+	if (cpu->sched->online <= 0)
+		return -CPUEAVAIL;
+
+	int retval = i_try_to_wake_up(cpu->rq->stop, IDSCHED_TASK_BLOCKED);
+	if (ilikely(retval)) {
+		cpu->flags |= IDSCHED_CORE_STOPPING;
+		return CPUSHUTOK;
+	}
+
+	return -CPUEAGAIN;
+}
+
+static void cpu_do_stopper(void)
+{
+	IWRITE_ONCE(unsigned, i_core_self()->flags, IDSCHED_CORE_OFFLINE);
+	i_schedule();
+}
+
+static void cpurq_migrate(void)
+{
+
+}
+
 
 static void set_next_task_stop(struct rqi *rq, idsched_task_t *p, bool first)
 {

@@ -108,6 +108,8 @@ int main(void)
 	assert(idsched_task_waittask(&task, &status) == 0);
 	assert(status == 0);
 
+	printf("main: waited for roottask %d\n", status);
+
 	assert(idsched_task_destroy(&task) == 0);
 	assert(idsched_core_shutdown(&sched, IDSCHED_ALL_CORES) == 1);
 	assert(idsched_destroy(&sched) == 0);

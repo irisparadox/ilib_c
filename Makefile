@@ -1,6 +1,8 @@
 CC = gcc
 CFLAGS = -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -Iinclude -Iarch -Wall -Wextra -std=c99 -pedantic -pthread
-DEBUGF = -fsanitize=address,undefined -fno-omit-frame-pointer -g3 -O0
+ASANF = -fsanitize=address,undefined -fno-omit-frame-pointer -g3 -O0
+VALGRINDF = -g3 -O0
+DEBUGF = $(VALGRINDF)
 
 TARGET = out/main
 
