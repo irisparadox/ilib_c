@@ -7,4 +7,7 @@
 #define IREAD_ONCE(type, x) (*(const volatile type *)&(x))
 #define IWRITE_ONCE(type, x, val) do { *(volatile type *)&(x) = (val); } while (0)
 
+#define atomic_landnot(var, val) __sync_fetch_and_and(&(var), ~(val))
+#define atomic_lor(var, val) __sync_fetch_and_or(&(var), (val))
+
 #endif // COMPILER_IATTR_H_

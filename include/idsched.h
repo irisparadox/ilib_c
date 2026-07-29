@@ -1,7 +1,6 @@
 #ifndef IDSCHED_H_
 #define IDSCHED_H_
 
-#include <bits/time.h>
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif  /* _POSIX_C_SOURCE */
@@ -15,12 +14,12 @@
 #endif /* !defined(_POSIX_VERSION) || _POSIX_VERSION < 200809L */
 
 #include <deftypei.h>
-#include <queue.h>
 #include <ihstmap.h>
 #include <icontext.h>
 #include <ilisti.h>
 #include <compiler_iattr.h>
 #include <x86-64/cache.h>
+#include <ifutex.h>
 #include <ilinux/funfunc.h>
 
 #define IDSCHED_CORE_OFFLINE  (1u << 0)
@@ -29,12 +28,10 @@
 #define IDSCHED_CORE_IDLE     (1u << 3)
 
 #define IDSCHED_TASK_NEW      (1u << 0)
-#define IDSCHED_TASK_READY    (1u << 1)
 #define IDSCHED_TASK_RUNNING  (1u << 2)
 #define IDSCHED_TASK_DONE     (1u << 3)
 #define IDSCHED_TASK_BLOCKED  (1u << 4)
-#define IDSCHED_TASK_REAPED   (1u << 5)
-#define IDSCHED_TASK_USROWN   (1u << 6)
+
 
 #define ISC_TASK_ON_RQ_NONE      0
 #define ISC_TASK_ON_RQ_QUEUED    1
@@ -198,22 +195,19 @@ struct idsched_task {
 };
 
 struct idsched_core {
-	idsched_t      *sched;
-	ilib_size_t     id;
+	idsched_t       *sched;
+	ilib_size_t      id;
 
-	icontext_t      bootctx;
+	icontext_t       bootctx;
 
-	pthread_t       thread;
+	pthread_t        thread;
 
-	pthread_mutex_t lck;
-	pthread_cond_t  cv;
+	pthread_mutex_t  lck;
+	pthread_cond_t   cv;
 
-	pqueue_t        rq;
+        struct rqi      *rq;
 
-	idsched_task_t *currt;
-	idsched_task_t  idle;
-
-	ilib_uint32_t   flags;
+	ilib_uint32_t    flags;
 };
 
 
@@ -242,7 +236,7 @@ struct rqi {
 	/*
 	 * Next cache line will hold the hot rq lock.
 	 */
-	ilib_uint64_t               nr_switches		__i__cacheline_aligned;
+	u64                         nr_switches		__i__cacheline_aligned;
 
 	pthread_mutex_t             __lock;
 
@@ -259,8 +253,9 @@ struct rqi {
 #endif /* IDSCHED_SCHEDSTATS == 1 */
 };
 
-#define ISC_SM_IDLE (-1)
-#define ISC_SM_NONE 0
+#define ISC_SM_IDLE    (-1)
+#define ISC_SM_NONE    0
+#define ISC_SM_PREEMPT 1
 
 struct idsched_class {
 	void (*enqueue_task) (struct rqi *rq, idsched_task_t *p, int flags);
@@ -335,20 +330,13 @@ int idsched_run(idsched_t *sched);
 #define I_IDSCH_IMPL
 
 #include <stdlib.h>
-
-#ifndef PQUEUE_IMPLEMENTATION
-#define PQUEUE_IMPLEMENTATION
-#endif  /* PQUEUE_IMPLEMENTATION */
-
-#include "queue.h"
-
 #include <time.h>
 
 #ifndef IHSTMAP_IMPLEMENTATION
 #define IHSTMAP_IMPLEMENTATION
 #endif  /* IHSTMAP_IMPLEMENTATION */
 
-#include "ihstmap.h"
+#include <ihstmap.h>
 
 #ifndef ILISTI_IMPLEMENTATION
 #define ILISTI_IMPLEMENTATION
@@ -364,7 +352,7 @@ int idsched_run(idsched_t *sched);
 #define _I__TASK_TGL(t, f) ((t)->__state ^= (f))
 
 #define _I__TASK_MSTAT                                                  \
-	(IDSCHED_TASK_NEW | IDSCHED_TASK_READY | IDSCHED_TASK_RUNNING | \
+	(IDSCHED_TASK_NEW | IDSCHED_TASK_RUNNING | \
 	IDSCHED_TASK_BLOCKED | IDSCHED_TASK_DONE)
 
 #define _I__TASK_STSTAT(t, s)                  \
@@ -374,37 +362,37 @@ int idsched_run(idsched_t *sched);
 	} while (0)
 
 #define _I__TIF_NEED_RESCHED (1u << 3)
+#define _I__TIF____REAPED    (1u << 5)
+#define _I__TIF____USROWN    (1u << 6)
 
 #define i_tif_need_resched(t) \
 	((t)->flags & _I__TIF_NEED_RESCHED)
+#define i_tif_reaped(t) \
+	((t)->flags & _I__TIF____REAPED)
+#define i_tif_usrown(t) \
+	((t)->flags & _I__TIF____USROWN)
 
 #define schedstat_enabled()	iunlikely(IDSCHED_SCHEDSTATS)
 #define schedstat_inc(var)	do { if (schedstat_enabled()) { var++; } } while (0)
 
 static pthread_key_t i_core_key;
 
-static idsched_core_t *i_core_self(void)
+static inline idsched_core_t *i_core_self(void)
 {
 	return pthread_getspecific(i_core_key);
 }
 
-static int i_task_cmp(const void *a, const void *b)
+static inline struct rqi *cpu_rq(void)
 {
-	const idsched_task_t *ta;
-	const idsched_task_t *tb;
-	int                   pc;
-	int                   idc;
+	return i_core_self()->rq;
+}
 
-	ta = *(idsched_task_t * const *)a;
-	tb = *(idsched_task_t * const *)b;
+#define get_current() cpu_rq()->curr
+#define current get_current()
 
-	pc  = (ta->prio > tb->prio) -
-	      (ta->prio < tb->prio);
-
-	idc = (ta->tid > tb->tid) -
-	      (ta->tid < tb->tid);
-
-	return pc != 0 ? pc : idc;
+static inline struct rqi *task_rq(idsched_task_t *p)
+{
+	return p->core->rq;
 }
 
 /* ---------------- PRIVATE METHODS ---------------- */
@@ -510,12 +498,27 @@ static idsched_task_t *i_reaper_dequeue(ireaper *r);
 static void            i_reaper_adopt(ireaper *r, idsched_task_t *t);
 static void           *i_reaper_main(void *arg);
 
-static int  i_need_resched(void);
+static inline void i_set_tsk_reaped(idsched_task_t *t);
+static inline void i_set_tsk_usrown(idsched_task_t *t);
+
+static inline int  i_need_resched(void);
+static inline void i_clear_tsk_need_resched(idsched_task_t *t);
+static inline void i_set_tsk_need_resched(idsched_task_t *t);
+static void i_resched_curr(struct rqi *rq);
 static void i_schedule(void);
 static void i__schedule_loop(int sched_mode);
 static void i__schedule(int sched_mode);
 static void i_sched_entry(idsched_task_t *t);
 static void i_task_entry(idsched_task_t *t);
+
+static void i_ttwu_do_activate(struct rqi *rq, idsched_task_t *p, int flags);
+static int  i_try_to_wake_up(idsched_task_t *p, unsigned state);
+static void i_wake_up_new_task(idsched_task_t *p);
+
+void enqueue_task(struct rqi *rq, idsched_task_t *p, int flags);
+bool dequeue_task(struct rqi *rq, idsched_task_t *p, int flags);
+void activate_task(struct rqi *rq, idsched_task_t *p, int flags);
+void deactivate_task(struct rqi *rq, idsched_task_t *p, int flags);
 
 static bool            dequeue_task_idle(struct rqi *rq, idsched_task_t *p, int flags);
 static idsched_task_t *pick_task_idle(struct rqi *rq);
@@ -542,16 +545,12 @@ static void            set_next_task_rt(struct rqi *rq, idsched_task_t *p, bool 
 static void            task_tick_rt(struct rqi *rq, idsched_task_t *p);
 static void            update_curr_rt(struct rqi *rq);
 
-static int idle_swapper_loop(void *arg)
-{
-	(void)arg;
+static void cpurq_rt_prepare(struct rt_rqi *rt);
+static struct rqi *cpurq_prepare(void);
+static void cpurq_dispose(struct rqi *rq);
 
-	do {
-		idsched_task_yield();
-	} while (1);
-
-	return 0;
-}
+static void cpu_idle_prepare(void);
+static void i_do_idle(void);
 
 static int i_dispatch_schedcall(idsched_task_t *t)
 {
@@ -651,13 +650,7 @@ static void i_waitqwakeone(iwaitq *wq, idsched_task_t *chld)
 
 		pthread_mutex_unlock(&wq->lck);
 
-		_I__TASK_STSTAT(we->task, IDSCHED_TASK_READY);
-
-		pthread_mutex_lock(&we->task->core->lck);
-		pqueue_push(&we->task->core->rq, &we->task);
-		pthread_cond_signal(&we->task->core->cv);
-		pthread_mutex_unlock(&we->task->core->lck);
-
+		i_try_to_wake_up(we->task, IDSCHED_TASK_BLOCKED);
 		return;
 	}
 
@@ -817,7 +810,7 @@ static inline bool sched_stop_runnable(struct rqi *rq)
 
 static inline bool sched_rt_runnable(struct rqi *rq)
 {
-	return rq->rt.rt_queued > 0;
+	return rq->rt.rt_nr_running > 0;
 }
 
 static inline void add_nr_running(struct rqi *rq, unsigned count)
@@ -848,9 +841,147 @@ static u64 update_curr_common(struct rqi *rq)
 	return delta_exec;
 }
 
-static int i_need_resched(void)
+static inline int i_need_resched(void)
 {
-	return iunlikely(i_tif_need_resched(i_core_self()->currt));
+	return iunlikely(i_tif_need_resched(current));
+}
+
+static inline void i_clear_tsk_need_resched(idsched_task_t *t)
+{
+	atomic_landnot(t->flags, _I__TIF_NEED_RESCHED);
+}
+
+static inline void i_set_tsk_need_resched(idsched_task_t *t)
+{
+	atomic_lor(t->flags, _I__TIF_NEED_RESCHED);
+}
+
+static inline void i_set_tsk_reaped(idsched_task_t *t)
+{
+	atomic_lor(t->flags, _I__TIF____REAPED);
+}
+
+static inline void i_set_tsk_usrown(idsched_task_t *t)
+{
+	atomic_lor(t->flags, _I__TIF____USROWN);
+}
+
+static void i_resched_curr(struct rqi *rq)
+{
+	idsched_task_t *curr = rq->curr;
+
+	if (i_tif_need_resched(curr))
+		return;
+
+	i_set_tsk_need_resched(curr);
+}
+
+static void put_prev_set_next_task(struct rqi *rq, idsched_task_t *prev, idsched_task_t *next)
+{
+	if (next == prev)
+		return;
+
+	prev->sched_class->put_prev_task(rq, prev, next);
+	next->sched_class->set_next_task(rq, next, true);
+}
+
+static idsched_task_t *pick_next_task(struct rqi *rq)
+{
+	const struct idsched_class *class;
+	idsched_task_t *p;
+	u64 i;
+
+	for (i = 0; i < IARRAY_SIZE(sched_classes); ++i) {
+		class = sched_classes[i];
+
+		p = class->pick_task(rq);
+
+		if (ilikely(p)) {
+			put_prev_set_next_task(rq, rq->curr, p);
+			return p;
+		}
+	}
+
+	/* idle class should always have runnable task.  */
+	abort();
+}
+
+/*
+ * Enqueues p on run-queue, wake the core if it was idle.
+ */
+static void i_ttwu_do_activate(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	bool was_idle = (rq->curr == rq->idle);
+
+	activate_task(rq, p, flags);
+
+	if (was_idle) {
+		i_resched_curr(rq);
+		futex_wake_one(&rq->curr->flags);
+	}
+}
+
+static int i_try_to_wake_up(idsched_task_t *p, unsigned state)
+{
+	struct rqi *rq;
+
+	pthread_mutex_lock(&p->lck);
+
+	if (!(p->__state & state)) {
+		pthread_mutex_unlock(&p->lck);
+		return 0;
+	}
+
+	rq = task_rq(p);
+	pthread_mutex_lock(&rq->__lock);
+
+	if (p->on_rq) {
+		pthread_mutex_unlock(&rq->__lock);
+		pthread_mutex_unlock(&p->lck);
+		return 0;
+	}
+
+	p->__state = IDSCHED_TASK_RUNNING;
+	i_ttwu_do_activate(rq, p, 0);
+
+	pthread_mutex_unlock(&rq->__lock);
+	pthread_mutex_unlock(&p->lck);
+
+	return 1;
+}
+
+static void i_wake_up_new_task(idsched_task_t *p)
+{
+	struct rqi *rq = task_rq(p);
+
+	pthread_mutex_lock(&rq->__lock);
+	i_ttwu_do_activate(rq, p, 0);
+	pthread_mutex_unlock(&rq->__lock);
+}
+
+void enqueue_task(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	p->sched_class->enqueue_task(rq, p, flags);
+}
+
+inline bool dequeue_task(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	return p->sched_class->dequeue_task(rq, p, flags);
+}
+
+void activate_task(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	/* TODO check on migration */
+
+	enqueue_task(rq, p, flags);
+
+	IWRITE_ONCE(u8, p->on_rq, ISC_TASK_ON_RQ_QUEUED);
+}
+
+void deactivate_task(struct rqi *rq, idsched_task_t *p, int flags)
+{
+	IWRITE_ONCE(u8, p->on_rq, ISC_TASK_ON_RQ_MIGRATING);
+	dequeue_task(rq, p, flags);
 }
 
 /*
@@ -880,76 +1011,47 @@ static void i__schedule(int sched_mode)
 	unsigned long *switch_count;
 	unsigned long prev_state;
 	struct rqi *rq;
-	idsched_core_t *core = i_core_self();
-	prev = core->currt;
 
-	pthread_mutex_lock(&core->lck);
-	pthread_mutex_lock(&prev->lck);
+	rq = cpu_rq();
+	prev = rq->curr;
+
+	pthread_mutex_lock(&rq->__lock);
 
 	switch_count = &prev->nivcsw;
-	prev_state = prev->__state;
 
-	if (prev == &core->idle) {
-		if (pqueue_empty(&core->rq)) {
-			pthread_mutex_unlock(&prev->lck);
+	preempt = sched_mode == ISC_SM_PREEMPT;
 
-			if (core->flags & IDSCHED_CORE_STOPPING)
-				goto stopping;
-
+	prev_state = IREAD_ONCE(unsigned int, prev->__state);
+	if (sched_mode == ISC_SM_IDLE) {
+		if (!rq->nr_running) {
 			next = prev;
+			rq->next_class = &idle_sched_class;
 			goto picked;
 		}
-	} else if (!(prev_state & IDSCHED_TASK_RUNNING)) {
+	} else if (!preempt &&
+		   (prev_state & (IDSCHED_TASK_BLOCKED | IDSCHED_TASK_DONE))) {
+		prev->sched_class->dequeue_task(rq, prev, 0);
 		switch_count = &prev->nvcsw;
-
-		if (ilikely(prev_state & IDSCHED_TASK_READY))
-			pqueue_push(&core->rq, &prev);
 	}
 
-	pthread_mutex_unlock(&prev->lck);
-
-pick_again:
-	if (iunlikely(pqueue_empty(&core->rq))) {
-#if IDSCHED_DEBUG == 1
-		printf("[DEBUG_SCHED]: __SCHEDULE idle branch\n");
-#endif
-		next = &core->idle;
-
-		if (core->flags & IDSCHED_CORE_STOPPING)
-			goto stopping;
-
-		goto picked;
-	}
-
-	next = pqueue_top(&core->rq, idsched_task_t *);
-	pqueue_pop(&core->rq);
-
+	next = pick_next_task(rq);
+	rq->next_class = next->sched_class;
 picked:
+	i_clear_tsk_need_resched(prev);
 	is_switch = prev != next;
 	if (ilikely(is_switch)) {
+		rq->nr_switches++;
 		++(*switch_count);
 
-		core->currt = next;
 		_I__TASK_STSTAT(next, IDSCHED_TASK_RUNNING);
+		rq->curr = next;
 
-		pthread_mutex_unlock(&core->lck);
+		pthread_mutex_unlock(&rq->__lock);
 
-		isetcontext(&next->shctx);
-
-		abort();
+		iswapcontext(&prev->shctx, &next->shctx);
 	} else {
-		pthread_mutex_unlock(&core->lck);
+		pthread_mutex_unlock(&rq->__lock);
 	}
-
-	return;
-
-stopping:
-#if IDSCHED_DEBUG == 1
-	printf("[DEBUG_SCHED]: __SCHEDULE idle shutdown core\n");
-#endif
-	pthread_mutex_unlock(&core->lck);
-	isetcontext(&core->bootctx);
-	abort();
 }
 
 static inline void i__schedule_loop(int sched_mode)
@@ -964,106 +1066,70 @@ static inline void i_schedule(void)
 	i__schedule_loop(ISC_SM_NONE);
 }
 
-/*
- * Initial bootstrap routine.
- *
- * This function sets up the idle task and
- * kick-starts it for execution. The context
- * is saved as this bring-up machinery has to
- * be the one to return later for the pthread
- * to join. Technically, it could be done via
- * a shutdown routine using pthread_exit, but
- * since there's no need we can re-use this
- * entry.
- */
-static void i_core_run(idsched_core_t *core)
+static inline void i_schedule_idle(void)
 {
-	idsched_task_t *idle = &core->idle;
-	memset(idle, 0, sizeof(idsched_task_t));
+	do {
+		i__schedule(ISC_SM_IDLE);
+	} while (i_need_resched());
+}
 
-	idle->fn    = idle_swapper_loop;
-	idle->arg   = NULL;
-	idle->prnt  = NULL;
-	idle->core  = core;
-	idle->sched = core->sched;
 
-	_I__TASK_STSTAT(idle, IDSCHED_TASK_RUNNING);
+static void cpurq_rt_prepare(struct rt_rqi *rt)
+{
+	u64 i;
 
-	idle->exitst = 0;
-	idle->prio   = 0;
-
-	ilisti_init(&idle->children);
-	ilisti_init(&idle->sibling);
-
-	ilisti_init(&idle->wait.node);
-	idle->wait.task = idle;
-
-	pthread_mutex_init(&idle->wait_chldexit.lck, NULL);
-	ilisti_init(&idle->wait_chldexit.head);
-
-	idle->ctx.ic_stack.ss_sp    = malloc(IDSCHED_STCK_SIZE);
-	idle->ctx.ic_stack.ss_size  = IDSCHED_STCK_SIZE;
-	idle->ctx.ic_stack.ss_flags = 0;
-
-	if (iunlikely(idle->ctx.ic_stack.ss_sp == NULL)) {
-		pthread_mutex_destroy(&idle->wait_chldexit.lck);
-		return;
+	for (i = 0; i < MAX_RT_PRIO; ++i) {
+		ilisti_init(&rt->active.queue[i]);
 	}
 
-	idle->shctx.ic_stack.ss_sp    = malloc(IDSCHED_STCK_SIZE);
-	idle->shctx.ic_stack.ss_size  = IDSCHED_STCK_SIZE;
-	idle->shctx.ic_stack.ss_flags = 0;
+	memset(rt->active.bitmap, 0, sizeof(rt->active.bitmap));
+	rt->rt_nr_running = 0;
+	rt->rt_queued     = 0;
+}
 
-	if (iunlikely(idle->shctx.ic_stack.ss_sp == NULL)) {
-		pthread_mutex_destroy(&idle->wait_chldexit.lck);
-		free(idle->ctx.ic_stack.ss_sp);
-		return;
+static struct rqi *cpurq_prepare(void)
+{
+	struct rqi *rq = calloc(1, sizeof(struct rqi));
+
+	if (iunlikely(rq == NULL))
+		return NULL;
+
+	if (iunlikely(pthread_mutex_init(&rq->__lock, NULL) != 0)) {
+		free(rq);
+		return NULL;
 	}
 
-	if (iunlikely(igetcontext(&idle->ctx) != 0)) {
-		pthread_mutex_destroy(&idle->wait_chldexit.lck);
-		free(idle->ctx.ic_stack.ss_sp);
-		free(idle->shctx.ic_stack.ss_sp);
+	cpurq_rt_prepare(&rq->rt);
+
+	rq->nr_running  = 0;
+	rq->nr_switches = 0;
+	rq->curr        = NULL;
+	rq->idle        = NULL;
+	rq->stop        = NULL;
+	rq->next_class  = &idle_sched_class;
+
+	return rq;
+}
+
+static void cpurq_dispose(struct rqi *rq)
+{
+	if (iunlikely(rq == NULL))
 		return;
-	}
 
-	if (iunlikely(igetcontext(&idle->shctx) != 0)) {
-		pthread_mutex_destroy(&idle->wait_chldexit.lck);
-		free(idle->ctx.ic_stack.ss_sp);
-		free(idle->shctx.ic_stack.ss_sp);
-		return;
-	}
+	pthread_mutex_destroy(&rq->__lock);
+	free(rq);
+}
 
-	idle->shctx.ic_link = NULL;
 
-	idle->sc_nr  = IDSCHED_SYS_NONE;
-	idle->sc_ret = 0;
-
-	pthread_mutex_init(&idle->lck, NULL);
-	pthread_cond_init(&idle->cv, NULL);
-
-	idle->tid = IDSCHED_IDLE_TID;
-
-	imakecontext(&idle->ctx, (void (*)(void))idle_swapper_loop, 1, idle);
-	imakecontext(&idle->shctx, (void (*)(void))i_sched_entry, 1, idle);
-
-	igetcontext(&core->bootctx);
-	/* bootstrap context checkpoint here. After shutdown is requested
-           the scheduler comes back to this context and finishes execution.  */
-
-	if (core->flags & IDSCHED_CORE_STOPPING) {
-		pthread_mutex_destroy(&idle->wait_chldexit.lck);
-		pthread_mutex_destroy(&idle->lck);
-		pthread_cond_destroy(&idle->cv);
-		free(idle->ctx.ic_stack.ss_sp);
-		free(idle->shctx.ic_stack.ss_sp);
-		return;
-	}
-
-	core->currt = idle;
-	isetcontext(&idle->shctx);
-
-	abort();
+/*
+ * This is the cpu entry.
+ * It's where all the magic starts!
+ */
+static void i_core_run(void)
+{
+	cpu_idle_prepare();
+	while (1)
+		i_do_idle();
 }
 
 /* Worker Main Logic */
@@ -1074,7 +1140,7 @@ static void *i_core_worker(void *arg)
 	core = (idsched_core_t *)arg;
 	pthread_setspecific(i_core_key, core);
 
-	i_core_run(core);
+	i_core_run();
 
 	/* TODO:
 	 * Perform worker shutdown:
@@ -1108,7 +1174,6 @@ static void i_task_entry(idsched_task_t *t)
 	printf("i_task_entry: t=%p tid=%zu\n", (void *)t, t->tid);
 #endif
 	int status;
-	struct timespec t0, t1;
 
 	status = t->fn(t->arg);
 
@@ -1167,7 +1232,7 @@ static long i_wait_consider_task(struct iwait_opts *wo)
 		wo->wo_stat = wo->wo_target->exitst;
 
 		ilisti_remove(&wo->wo_target->sibling);
-		_I__TASK_SET(wo->wo_target, IDSCHED_TASK_REAPED);
+		i_set_tsk_reaped(wo->wo_target);
 		i_reaper_enqueue(&wo->wait.task->sched->reaper, wo->wo_target);
 
 		retval = ISC_WREAPED;
@@ -1214,7 +1279,7 @@ long i__do_wait(struct iwait_opts *wo)
 			wo->wo_stat = chld->exitst;
 
 			ilisti_remove(&chld->sibling);
-			_I__TASK_SET(chld, IDSCHED_TASK_REAPED);
+			i_set_tsk_reaped(chld);
 			i_reaper_enqueue(&tsk->sched->reaper, chld);
 
 			tsk->sc_ret = 0;
@@ -1232,13 +1297,12 @@ long i__do_wait(struct iwait_opts *wo)
 
 static long i_do_wait(struct iwait_opts *wo)
 {
-	idsched_task_t *tsk = i_core_self()->currt;
 	int retval;
 
-	wo->wait.task = tsk;
+	wo->wait.task = current;
 	wo->wait.target = wo->wo_target;
 
-	i_waitqadd(&tsk->wait_chldexit, &wo->wait);
+	i_waitqadd(&current->wait_chldexit, &wo->wait);
 
 	do {
 		retval = i__do_wait(wo);
@@ -1246,13 +1310,13 @@ static long i_do_wait(struct iwait_opts *wo)
 		if (ilikely(retval != ISC_WNOWAIT))
 			break;
 
-		_I__TASK_STSTAT(tsk, IDSCHED_TASK_BLOCKED);
+		_I__TASK_STSTAT(current, IDSCHED_TASK_BLOCKED);
 		i_schedule();
 	} while (1);
 
-	i_waitqremove(&tsk->wait_chldexit, &wo->wait);
+	i_waitqremove(&current->wait_chldexit, &wo->wait);
 
-	_I__TASK_STSTAT(tsk, IDSCHED_TASK_RUNNING);
+	_I__TASK_STSTAT(current, IDSCHED_TASK_RUNNING);
 
 	return retval;
 }
@@ -1377,8 +1441,8 @@ static long i_sys_fork(idsched_task_t *t)
 	if (iunlikely(chld->shctx.ic_stack.ss_sp == NULL)) {
 		pthread_mutex_destroy(&chld->lck);
 		pthread_cond_destroy(&chld->cv);
-		free(chld);
 		free(chld->ctx.ic_stack.ss_sp);
+		free(chld);
 		prnt->sc_ret = (imreg_t)IDSCHED_INVALID_CHILD;
 		return (long)IDSCHED_INVALID_CHILD;
 	}
@@ -1459,15 +1523,11 @@ static long i_sys_fork(idsched_task_t *t)
 	chld->prnt   = prnt;
 	ilisti_push_back(&prnt->children, &chld->sibling);
 
-	_I__TASK_STSTAT(chld, IDSCHED_TASK_READY);
 #if IDSCHED_DEBUG == 1
 	printf("[DEBUG_SCHED]: FORK enqueue tid=%zu task=%p core=%p\n", chld->tid, (void *)chld, (void *)chld->core);
 #endif
-	pthread_mutex_lock(&core->lck);
-	pqueue_push(&core->rq, &chld);
-	pthread_cond_signal(&core->cv);
-	pthread_mutex_unlock(&core->lck);
 
+	i_wake_up_new_task(chld);
 	return (long)chld;
 }
 
@@ -1491,9 +1551,8 @@ static long i_sys_yield(idsched_task_t *t)
 #if IDSCHED_DEBUG == 1
 	printf("[DEBUG_SCHED]: YIELD tid=%zu task=%p core=%p\n", t->tid, (void *)t, (void *)t->core);
 #endif
-	_I__TASK_STSTAT(t, IDSCHED_TASK_READY);
-	t->sc_ret = 0;
 
+	t->sc_ret = 0;
 	return 0;
 }
 
@@ -1527,7 +1586,7 @@ static void i_exit_notify(idsched_task_t *t)
 
 	if (t->prnt != NULL)
 		i_waitqwakeone(&t->prnt->wait_chldexit, t);
-	else if (!(_I__TASK_HAS(t, IDSCHED_TASK_USROWN)))
+	else if (!i_tif_usrown(t))
 		i_reaper_enqueue(&t->sched->reaper, t);
 }
 
@@ -1569,13 +1628,29 @@ int idsched_create(idsched_t *sched, ilib_size_t ncores)
 
 		core->sched = sched;
 		core->id    = i;
-		core->currt = NULL;
 		core->flags = IDSCHED_CORE_OFFLINE;
 
 		pthread_mutex_init(&core->lck, NULL);
 		pthread_cond_init(&core->cv, NULL);
 
-		pqueue_construct(&core->rq, sizeof(idsched_task_t *), i_task_cmp);
+		core->rq = cpurq_prepare();
+		if (iunlikely(core->rq == NULL)) {
+			ilib_size_t j;
+
+			pthread_mutex_destroy(&core->lck);
+			pthread_cond_destroy(&core->cv);
+
+			for (j = 0; j < i; ++j) {
+				cpurq_dispose(sched->cores[j].rq);
+				pthread_mutex_destroy(&sched->cores[j].lck);
+				pthread_cond_destroy(&sched->cores[j].cv);
+			}
+
+			free(sched->cores);
+			sched->cores = NULL;
+			pthread_mutex_destroy(&sched->lck);
+			return -1;
+		}
 	}
 
 	sched->cores[0].flags  = IDSCHED_CORE_ONLINE;
@@ -1605,7 +1680,9 @@ int idsched_destroy(idsched_t *sched)
 	for (i = 0; i < sched->ncores; ++i) {
 		idsched_core_t *core = &sched->cores[i];
 
-		pqueue_destroy(&core->rq);
+		cpurq_dispose(core->rq);
+		core->rq = NULL;
+
 		pthread_mutex_destroy(&core->lck);
 		pthread_cond_destroy(&core->cv);
 	}
@@ -1746,8 +1823,7 @@ idsched_tid idsched_task_create(idsched_t *sch, idsched_task_t *t, int (*fn)(voi
 	t->sched    = sch;
 	t->core     = NULL;
 	_I__TASK_STSTAT(t, IDSCHED_TASK_NEW);
-	_I__TASK_SET(t, IDSCHED_TASK_USROWN);
-	t->flags    = 0;
+	i_set_tsk_usrown(t);
 	t->exitst   = 0;
 	t->prio     = MAX_RT_PRIO - 1;
 	t->on_rq    = ISC_TASK_ON_RQ_NONE;
@@ -1907,57 +1983,54 @@ int idsched_task_submit(idsched_t *sch, idsched_task_t *t)
 		return -1;
 	}
 
-	ilib_uint64_t ns;
-
 	t->core  = core;
-	_I__TASK_STSTAT(t, IDSCHED_TASK_READY);
-
 	t->ctx.ic_link = &t->shctx;
 
 	imakecontext(&t->ctx, (void (*)(void))i_task_entry, 1, t);
 	imakecontext(&t->shctx, (void (*)(void))i_sched_entry, 1, t);
 
-	pthread_mutex_lock(&core->lck);
-	pqueue_push(&core->rq, &t);
-	pthread_cond_signal(&core->cv);
-	pthread_mutex_unlock(&core->lck);
-
+	i_wake_up_new_task(t);
 	pthread_mutex_unlock(&sch->lck);
 	return 0;
 }
 
 int idsched_task_wait(int *wstatus)
 {
+	idsched_task_t *tsk;
 	idsched_core_t *core;
-	idsched_task_t *curr;
 
 	core = i_core_self();
 	if (core == NULL) return -1;
 
-	curr = core->currt;
-	if (curr == NULL) return -1;
+	tsk = current;
+	if (tsk == NULL) return -1;
 
-	curr->sc_arg[0] = (ilib_uintptr_t)wstatus;
+	tsk->sc_arg[0] = (ilib_uintptr_t)wstatus;
 
-	return (int)i_schedcall(curr, IDSCHED_SYS_WAIT);
+	return (int)i_schedcall(tsk, IDSCHED_SYS_WAIT);
 }
 
 int idsched_task_waittask(idsched_task_t *t, int *wstatus)
 {
 	idsched_core_t *core;
 	idsched_task_t *curr;
+	struct rqi *rq;
 
 	if (t == NULL)
 		return -1;
 
 	core = i_core_self();
+	if (core != NULL) {
+		rq = cpu_rq();
+		curr = rq->curr;
 
-	if (core != NULL && (curr = core->currt) != NULL) {
-		curr->sc_arg[0] = (ilib_uintptr_t)t;
-		curr->sc_arg[1] = (ilib_uintptr_t)wstatus;
-		curr->sc_arg[2] = 0;
+		if (curr != rq->idle) {
+			curr->sc_arg[0] = (ilib_uintptr_t)t;
+			curr->sc_arg[1] = (ilib_uintptr_t)wstatus;
+			curr->sc_arg[2] = 0;
 
-		return (int)i_schedcall(curr, IDSCHED_SYS_WAIT4);
+			return (int)i_schedcall(curr, IDSCHED_SYS_WAIT4);
+		}
 	}
 
 	pthread_mutex_lock(&t->lck);
@@ -1977,15 +2050,13 @@ int idsched_task_waittask(idsched_task_t *t, int *wstatus)
 int idsched_task_yield(void)
 {
 	idsched_core_t *core;
-	idsched_task_t *task;
 
 	core = i_core_self();
 	if (core == NULL) return -1;
 
-	task = core->currt;
-	if (task == NULL) return -1;
+	if (current == NULL) return -1;
 
-	return (int)i_schedcall(task, IDSCHED_SYS_YIELD);
+	return (int)i_schedcall(current, IDSCHED_SYS_YIELD);
 }
 
 int idsched_task_exec(int (*fn)(void *), void *arg)
@@ -1993,7 +2064,7 @@ int idsched_task_exec(int (*fn)(void *), void *arg)
 	idsched_core_t *core = i_core_self();
 	if (core == NULL) return -1;
 
-	idsched_task_t *t = core->currt;
+	idsched_task_t *t = current;
 	if (t == NULL) return -1;
 
 	t->sc_arg[0] = (ilib_uintptr_t)fn;
@@ -2007,8 +2078,7 @@ int idsched_task_exec(int (*fn)(void *), void *arg)
 
 idsched_task_t *idsched_task_fork(void)
 {
-	idsched_core_t *core = i_core_self();
-	idsched_task_t *prnt = core->currt;
+	idsched_task_t *prnt = current;
 
 	return (idsched_task_t *)i_schedcall(prnt, IDSCHED_SYS_FORK);
 }
@@ -2018,12 +2088,68 @@ int idsched_run(idsched_t *sched)
 	if (sched == NULL) return -1;
 	pthread_setspecific(i_core_key, &sched->cores[0]);
 
-	i_core_run(&sched->cores[0]);
+	i_core_run();
 
 	return 0;
 }
 
 /* SCHEDULER CLASSES */
+
+/* idle class */
+static void cpu_idle_prepare(void)
+{
+	struct rqi *rq = cpu_rq();
+	idsched_core_t *core = i_core_self();
+
+	rq->idle = calloc(1, sizeof(idsched_task_t));
+	if (iunlikely(rq->idle == NULL))
+		BUG();
+	/* we can't go on with initialization if idle can't be allocated */
+
+	idsched_task_t *idle = rq->idle;
+
+	memset(idle, 0, sizeof(idsched_task_t));
+
+	idle->sched = core->sched;
+	idle->core  = core;
+
+	idle->tid   = IDSCHED_IDLE_TID;
+	idle->prio  = 0;
+
+	idle->sched_class = &idle_sched_class;
+	idle->flags = 0;
+
+	ilisti_init(&idle->children);
+	ilisti_init(&idle->sibling);
+	ilisti_init(&idle->run_list);
+
+	ilisti_init(&idle->wait.node);
+	idle->wait.task = idle;
+
+	ilisti_init(&idle->wait_chldexit.head);
+
+	pthread_mutex_init(&idle->wait_chldexit.lck, NULL);
+	pthread_mutex_init(&idle->lck, NULL);
+	pthread_cond_init(&idle->cv, NULL);
+
+	rq->curr = idle;
+}
+
+static void i_do_idle(void)
+{
+	idsched_core_t *cpu = i_core_self();
+	struct rqi *rq = cpu_rq();
+
+	if (cpu->flags & IDSCHED_CORE_STOPPING) {
+		/* todo jump to core shutdown */
+	}
+
+	while(!i_need_resched()) {
+		futex_wait_zero(&rq->idle->flags);
+	}
+
+	i_schedule_idle();
+}
 
 static void put_prev_task_idle(struct rqi *rq, idsched_task_t *prev, idsched_task_t *next)
 {
@@ -2255,7 +2381,7 @@ static idsched_task_t *pick_task_rt(struct rqi *rq)
 	if (!sched_rt_runnable(rq))
 		return NULL;
 
-	p = 0;
+	p = _pick_next_task_rt(rq);
 
 	return p;
 }
@@ -2263,6 +2389,7 @@ static idsched_task_t *pick_task_rt(struct rqi *rq)
 static void put_prev_task_rt(struct rqi *rq, idsched_task_t *p, idsched_task_t *next)
 {
 	(void)next;
+	(void)p;
 	update_curr_rt(rq);
 }
 

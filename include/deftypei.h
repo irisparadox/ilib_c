@@ -69,4 +69,15 @@ typedef unsigned long  ilib_uintptr_t;
 #define bitmap_clear(bmp, bit) bmp[bit / BITS_PER_TYPE(long)] &= \
 	~(1UL << (bit % BITS_PER_TYPE(long)))
 
+#if defined(__GNUC__) || defined(__clang__)
+#define __imust_be_array(arr) \
+(sizeof(char[1 - 2 * __builtin_types_compatible_p(__typeof__(arr), __typeof__(&(arr)[0]))]) - 1)
+
+#define IARRAY_SIZE(arr) \
+(sizeof(arr) / sizeof((arr)[0]) + __imust_be_array(arr))
+#else
+#define IARRAY_SIZE(arr) \
+(sizeof(arr) / sizeof((arr)[0]))
+#endif /* defined(__GNUC__) || defined(__clang__) */
+
 #endif /* DEFTYPEI_H */
