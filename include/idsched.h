@@ -20,7 +20,7 @@
 #include <compiler_iattr.h>
 #include <x86-64/cache.h>
 #include <ifutex.h>
-#include <ilinux/funfunc.h>
+#include <kinclude/kfun.h>
 
 #define IDSCHED_CORE_OFFLINE  (1u << 0)
 #define IDSCHED_CORE_ONLINE   (1u << 1)

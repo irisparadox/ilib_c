@@ -1,5 +1,5 @@
-#ifndef FUNFUNC_H_
-#define FUNFUNC_H_
+#ifndef KFUN_H_
+#define KFUN_H_
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,4 +13,4 @@
 
 #define BUG_ON(condition) do { if (iunlikely(condition)) { BUG(); } } while (0)
 
-#endif // FUNFUNC_H_
+#endif // KFUN_H_

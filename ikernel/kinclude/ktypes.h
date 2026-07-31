@@ -1,0 +1,31 @@
+#ifndef KTYPES_H_
+#define KTYPES_H_
+
+typedef unsigned char  u8;
+typedef signed   char  s8;
+
+typedef unsigned short u16;
+typedef signed   short s16;
+
+typedef unsigned long  u64;
+typedef signed   long  s64;
+
+#ifndef bool
+#define bool  _Bool
+#define true  1
+#define false 0
+#endif
+
+#ifndef NULL
+#define NULL ((void *)0)
+#endif  /* NULL */
+
+#if defined(__GNUC__) || defined(__clang__)
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#else
+#define likely(x)   (x)
+#define unlikely(x) (x)
+#endif /* defined(__GNUC__) || defined(__clang__) */
+
+#endif // KTYPES_H_
