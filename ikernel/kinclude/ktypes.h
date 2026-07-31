@@ -1,14 +1,18 @@
 #ifndef KTYPES_H_
 #define KTYPES_H_
 
-typedef unsigned char  u8;
-typedef signed   char  s8;
+typedef unsigned char  	u8;
+typedef signed   char  	s8;
 
-typedef unsigned short u16;
-typedef signed   short s16;
+typedef unsigned short 	u16;
+typedef signed   short 	s16;
 
-typedef unsigned long  u64;
-typedef signed   long  s64;
+typedef unsigned long  	u64;
+typedef signed   long  	s64;
+
+typedef unsigned long  	kuptr;
+
+typedef int            	__ikernel_tid;
 
 #ifndef bool
 #define bool  _Bool

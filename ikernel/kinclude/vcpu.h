@@ -2,6 +2,7 @@
 #define VCPU_H_
 
 #include <pthread.h>
+#include <compiler_iattr.h>
 #include <kinclude/kconf.h>
 #include <kinclude/ktypes.h>
 
@@ -14,6 +15,7 @@
 #define CPU_F_WAITJOIN (1u << 1)
 #define CPU_F_DELEGATE (1u << 2)
 
+struct ikern;
 struct rqi;
 
 struct ivcpu_array {
@@ -35,6 +37,8 @@ struct ivcpu {
 	pthread_mutex_t  	 cpu_lock;
 	pthread_cond_t   	 cpu_signal;
 
+	struct ikern     	*kern;
+
 #if KCONF_VCPU_STATS == 1
 	u64              	 vruntime;
 	u64              	 nr_migrate;
@@ -42,11 +46,15 @@ struct ivcpu {
 #endif /* KCONF_VCPU_STATS */
 };
 
-static inline struct ivcpu 	*cpu_self(void);
-static inline bool         	 cpu_is_online(struct ivcpu *cpu);
-static inline bool         	 cpu_is_offline(struct ivcpu *cpu);
+extern struct ivcpu 	*cpu_self(void);
+extern struct ikern 	*ikern_self(void);
+extern struct rqi   	*cpu_rq(void);
+extern bool         	 cpu_is_online(struct ivcpu *cpu);
+extern bool         	 cpu_is_offline(struct ivcpu *cpu);
 
-static void 	cpu_submit_online(struct ivcpu *cpu);
-static void 	cpu_submit_offline(struct ivcpu *cpu);
+extern void 	cpu_submit_online(struct ivcpu *cpu);
+extern void 	cpu_submit_offline(struct ivcpu *cpu);
+
+void __inoreturn cpu_startup_entry(void);
 
 #endif // VCPU_H_

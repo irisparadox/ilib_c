@@ -1,4 +1,54 @@
+#include <stdlib.h>
+#include <ifutex.h>
 #include <kinclude/sched.h>
+#include <kinclude/vcpu.h>
+#include <kinclude/kfun.h>
+
+static void cpu_idle_prepare(void)
+{
+	struct rqi   *rq  = cpu_rq();
+	struct ikern *ker = ikern_self();
+
+	rq->idle = calloc(1, sizeof(struct itask));
+	if (unlikely(rq->idle == NULL))
+		BUG();
+	/* we can't go on with initialization if idle can't be allocated */
+
+	struct itask *idle = rq->idle;
+	idle->tid = tid_alloc(&ker->tid_al);
+	idle->prio = MAX_PRIO - 1;
+
+	idle->sched_class = &idle_sched_class;
+	idle->flags       = 0;
+
+	ilisti_init(&idle->children);
+	ilisti_init(&idle->sibling);
+	ilisti_init(&idle->wait_chldexit.head);
+	ilisti_init(&idle->run_list);
+	ilisti_init(&idle->wait_entry.entry);
+
+	pthread_mutex_init(&idle->sleep_lock, NULL);
+	pthread_cond_init(&idle->sleep_signal, NULL);
+
+	rq->curr    = idle;
+	idle->on_rq = TASK_ON_RQ_QUEUED;
+}
+
+static void do_idle(void)
+{
+	struct ivcpu *cpu = cpu_self();
+	struct rqi   *rq  = cpu_rq();
+
+	if (cpu_is_offline(cpu)) {
+		idle_play_dead();
+	}
+
+	while (need_resched()) {
+		futex_wait_zero(&rq->idle->flags);
+	}
+
+	schedule_idle();
+}
 
 static void update_curr_idle(struct rqi *rq);
 
