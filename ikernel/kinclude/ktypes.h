@@ -32,4 +32,11 @@ typedef int            	__ikernel_tid;
 #define unlikely(x) (x)
 #endif /* defined(__GNUC__) || defined(__clang__) */
 
+typedef volatile long	__katomic_long_t;
+
+#define __katomic_long_and(val, var)   	__sync_fetch_and_and((var), (val))
+#define __katomic_long_andnot(val, var)	__sync_fetch_and_and((var), ~(val))
+
+#define __katomic_long_or(val, var)    	__sync_fetch_and_or((var), (val))
+
 #endif // KTYPES_H_

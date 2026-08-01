@@ -1,11 +1,11 @@
 #ifndef SCHED_H_
 #define SCHED_H_
 
-#include "icontext.h"
 #include <pthread.h>
 #include <deftypei.h>
 #include <ilisti.h>
 #include <compiler_iattr.h>
+#include <icontext.h>
 #include <x86-64/cache.h>
 #include <kinclude/kconf.h>
 #include <kinclude/ktypes.h>
@@ -159,14 +159,21 @@ static const struct isched_class *const sched_classes[] = {
 	&idle_sched_class,
 };
 
-#define get_current()      	cpu_rq()->curr
-#define current            	get_current()
+extern __thread void         *kernel_sp_scratch;
+extern __thread void         *user_sp_scratch;
+extern __thread struct itask *current_task;
+#define current            	current_task
 
 #define schedstat_enabled()	unlikely(KCONF_SCHED_STATS)
 #define schedstat_inc(var) 	do { if (schedstat_enabled()) { var++; } } while(0)
 
 #define tif_test_bit(bit)  	arch_test_bit(bit, (unsigned long *)&current->flags)
 #define tif_need_resched() 	tif_test_bit(TIF_NEED_RESCHED)
+
+static inline void clear_tsk_need_resched(struct itask *tsk)
+{
+	__katomic_long_andnot(TIF_NEED_RESCHED, (__katomic_long_t *)&tsk->flags);
+}
 
 static __ialways_inline bool need_resched(void)
 {

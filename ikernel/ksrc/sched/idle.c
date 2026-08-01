@@ -50,6 +50,13 @@ static void do_idle(void)
 	schedule_idle();
 }
 
+void cpu_startup_entry(void)
+{
+	cpu_idle_prepare();
+	while (1)
+		do_idle();
+}
+
 static void update_curr_idle(struct rqi *rq);
 
 static void put_prev_task_idle(struct rqi *rq, struct itask *prev, struct itask *next)
