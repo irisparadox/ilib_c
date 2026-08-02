@@ -1,28 +1,105 @@
 #include <kinclude/ktid.h>
 #include <kinclude/kfun.h>
+#include <kinclude/sched.h>
+#include <kinclude/syscall.h>
 
-tid_t tid_alloc(struct ktid_alloc *al)
+struct itask *tid_task(struct ktid_alloc *al, int tid)
 {
-	tid_t tid;
+	if (tid >= TID_MAX || tid < 0) return NULL;
+
+	return al->slots[tid].thread;
+}
+
+struct itask *ktid_get_task(struct ktid *ktid)
+{
+	return ktid->thread;
+}
+
+struct ktid *tid_get_ktid(struct ktid_alloc *al, int tid)
+{
+	if (tid >= TID_MAX || tid < 0) return NULL;
+
+	return &al->slots[tid];
+}
+
+static struct ktid **task_ktid_ptr(struct itask *task)
+{
+	return &task->tid;
+}
+
+void attach_ktid(struct itask *task)
+{
+	struct ktid *ktid;
+
+	ktid = *task_ktid_ptr(task);
+	ktid->thread = task;
+}
+
+static void __change_ktid(struct itask *task, struct ktid *new)
+{
+	struct ktid **ktid_ptr, *ktid;
+
+	ktid_ptr = task_ktid_ptr(task);
+	ktid     = *ktid_ptr;
+
+	if (ktid)
+		ktid->thread = NULL;
+
+	*ktid_ptr = new;
+
+	if (new)
+		new->thread = task;
+}
+
+void detach_ktid(struct itask *task)
+{
+	__change_ktid(task, NULL);
+}
+
+void change_ktid(struct itask *task, struct ktid *ktid)
+{
+	__change_ktid(task, ktid);
+}
+
+void ktid_init(struct ktid_alloc *al)
+{
+	tid_t i;
+
+	pthread_mutex_init(&al->lock, NULL);
+	ilisti_init(&al->ktid_head);
+}
+
+struct ktid *ktid_alloc(struct ktid_alloc *al)
+{
+	struct ktid *ktid;
+	struct ilinode *node;
 
 	pthread_mutex_lock(&al->lock);
-	for (tid = 0; tid < TID_MAX; ++tid) {
-		if (bitmap_test(al->bitmap, tid)) {
-			pthread_mutex_unlock(&al->lock);
-			return tid;
-		}
+
+	node = ilisti_front(&al->ktid_head);
+	if (node) {
+		ktid = ILISTI_ENTRY(node, struct ktid, ktid_link);
+		ilisti_remove(node);
+	} else if (al->next_tid < TID_MAX) {
+		ktid = &al->slots[al->next_tid];
+		ktid->id = al->next_tid++;
+	} else {
+		pthread_mutex_unlock(&al->lock);
+		return NULL;
 	}
 
 	pthread_mutex_unlock(&al->lock);
-	return TID_MAX;
+	return ktid;
 }
 
-void free_tid(struct ktid_alloc *al, tid_t tid)
+void free_tid(struct ktid_alloc *al, struct ktid *ktid)
 {
-	if (tid >= TID_MAX || tid < 0)
-		BUG();
-
 	pthread_mutex_lock(&al->lock);
-	bitmap_clear(al->bitmap, tid);
+	ilisti_push_front(&al->ktid_head, &ktid->ktid_link);
 	pthread_mutex_unlock(&al->lock);
+}
+
+SYSCALL_DEFINE0(gettid)
+{
+	return current->tid->id;
 }

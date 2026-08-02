@@ -35,6 +35,19 @@ struct ikern {
 #define TIF_NEED_RESCHED	(1u << 3)
 #define TIF____REAPED   	(1u << 5)
 
+/* Used in tsk->__state: */
+#define TASK_RUNNING      	0x00000000
+#define TASK_INTERRUPTIBLE	0x00000001
+#define TASK_UNINTERRUPTIBLE	0x00000002
+#define TASK_DEAD         	0x00000080
+#define TASK_NOLOAD         	0x00000400
+#define TASK_NEW          	0x00000800
+/* Used in tsk->exit_state: */
+#define EXIT_DEAD       	0x00000010
+#define EXIT_ZOMBIE         	0x00000020
+
+#define TASK_IDLE           	(TASK_UNINTERRUPTIBLE | TASK_NOLOAD)
+
 struct itask {
 	/* Link to parent task, wait4() reports: */
 	struct itask             	*parent;
@@ -53,7 +66,7 @@ struct itask {
 	/* Per task flags (TF_*): */
 	unsigned int             	 flags;
 
-	tid_t                    	 tid;
+	struct ktid                    	*tid;
 
 	int                      	 prio;
 	const struct isched_class	*sched_class;

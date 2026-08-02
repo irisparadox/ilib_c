@@ -15,10 +15,12 @@ static void cpu_idle_prepare(void)
 	/* we can't go on with initialization if idle can't be allocated */
 
 	struct itask *idle = rq->idle;
-	idle->tid = tid_alloc(&ker->tid_al);
+	idle->tid  = ktid_alloc(&ker->tid_al);
+	attach_ktid(idle);
 	idle->prio = MAX_PRIO - 1;
 
 	idle->sched_class = &idle_sched_class;
+	idle->__state     = TASK_RUNNING;
 	idle->flags       = 0;
 
 	ilisti_init(&idle->children);

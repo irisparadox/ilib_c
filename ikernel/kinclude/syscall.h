@@ -8,8 +8,9 @@
 #define SYS_EXIT 	1
 #define SYS_WAIT4	2
 #define SYS_YIELD	3
+#define SYS_GETTID	4
 
-#define NR_SYSCALLS	4
+#define NR_SYSCALLS	5
 
 #define __SC_DECL(t, a)   t a
 #define __SC_CAST(t, a)   (t)a
@@ -25,7 +26,7 @@
 
 #define __SC_TYPE(t, a)   t
 
-#define SC_X86_64_PT_ARG0(m)
+#define SC_X86_64_PT_ARG0(m, ...)
 #define SC_X86_64_PT_ARG1(m, t1) \
 	m(t1, regs->di)
 #define SC_X86_64_PT_ARG2(m, t1, t2) \
@@ -39,7 +40,7 @@
 #define SC_X86_64_PT_ARG6(m, t1, t2, t3, t4, t5, t6) \
 	SC_X86_64_PT_ARG5(m, t1, t2, t3, t4, t5), m(t6, regs->r9)
 
-#define SC_X86_64_PT_ARGS(x, m, ...) SC_X86_64_PT_ARG##x(m, __VA_ARGS__)
+#define SC_X86_64_PT_ARGS(x, m, ...) SC_X86_64_PT_ARG##x(m, ##__VA_ARGS__)
 
 #define SC_X86_64_REGS_TO_ARGS(x, ...) \
 	SC_X86_64_PT_ARGS(x, __SC_CAST, __MAP(x, __SC_TYPE, __VA_ARGS__))
@@ -68,5 +69,6 @@ extern long isys_fork(struct ipt_regs *regs);
 extern long isys_exit(struct ipt_regs *regs);
 extern long isys_wait4(struct ipt_regs *regs);
 extern long isys_sched_yield(struct ipt_regs *regs);
+extern long isys_gettid(struct ipt_regs *regs);
 
 #endif // SYSCALL_H_

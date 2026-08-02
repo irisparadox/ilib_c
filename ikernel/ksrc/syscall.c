@@ -2,10 +2,11 @@
 #include <kinclude/syscall.h>
 
 static long (*syscall_table[NR_SYSCALLS])(struct ipt_regs *) = {
-	[SYS_FORK]  = isys_fork,
-	[SYS_EXIT]  = isys_exit,
-	[SYS_WAIT4] = isys_wait4,
-	[SYS_YIELD] = isys_sched_yield,
+	[SYS_FORK]   = isys_fork,
+	[SYS_EXIT]   = isys_exit,
+	[SYS_WAIT4]  = isys_wait4,
+	[SYS_YIELD]  = isys_sched_yield,
+	[SYS_GETTID] = isys_gettid,
 };
 
 
