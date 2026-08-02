@@ -19,5 +19,6 @@
 #define EEXIST		17	/* File exists */
 #define EINVAL		22	/* Invalid argument */
 #define ENOSYS		38	/* Invalid system call number */
+#define ERESTARTSYS	512
 
 #endif // KERRNO_H_

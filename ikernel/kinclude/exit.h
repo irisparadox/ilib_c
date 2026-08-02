@@ -2,9 +2,11 @@
 #define EXIT_H_
 
 struct iwait_opts {
-	struct itask       	*wo_target;
-	int                	 wo_stat;
+	enum tid_type      	 wo_type;
 	int                	 wo_flags;
+	struct ktid        	*wo_ktid;
+
+	int                	 wo_stat;
 
 	iwait_queue_entry_t	 child_wait;
 	int                	 notask_error;

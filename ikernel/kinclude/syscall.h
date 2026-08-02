@@ -40,7 +40,7 @@
 #define SC_X86_64_PT_ARG6(m, t1, t2, t3, t4, t5, t6) \
 	SC_X86_64_PT_ARG5(m, t1, t2, t3, t4, t5), m(t6, regs->r9)
 
-#define SC_X86_64_PT_ARGS(x, m, ...) SC_X86_64_PT_ARG##x(m, ##__VA_ARGS__)
+#define SC_X86_64_PT_ARGS(x, m, ...) SC_X86_64_PT_ARG##x(m, __VA_ARGS__)
 
 #define SC_X86_64_REGS_TO_ARGS(x, ...) \
 	SC_X86_64_PT_ARGS(x, __SC_CAST, __MAP(x, __SC_TYPE, __VA_ARGS__))

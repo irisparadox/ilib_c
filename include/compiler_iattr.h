@@ -34,4 +34,13 @@ static __ialways_inline bool arch_test_bit(long nr, const volatile unsigned long
 }
 #endif /* defined(__x86_64__) */
 
+#define icmpxchg(ptr, oldval, newval)					\
+	({								\
+		__typeof__(oldval) __old = (oldval);			\
+		__atomic_compare_exchange_n((ptr), &__old, (newval),	\
+					     0, __ATOMIC_SEQ_CST,	\
+					     __ATOMIC_SEQ_CST);	\
+		__old;							\
+	})
+
 #endif // COMPILER_IATTR_H_

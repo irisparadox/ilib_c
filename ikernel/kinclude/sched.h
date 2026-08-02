@@ -12,6 +12,7 @@
 #include <kinclude/vcpu.h>
 #include <kinclude/wait.h>
 #include <kinclude/ktid.h>
+#include <kinclude/kreaper.h>
 
 struct ikern;
 struct ireaper;
@@ -27,7 +28,11 @@ struct isched_class;
 #define SM_PREEMPT	2
 
 struct ikern {
-	struct ktid_alloc tid_al;
+	struct kreaper    	reaper;
+	struct ktid_alloc 	tid_al;
+	struct ivcpu_array	vcpus;
+
+	pthread_rwlock_t 	tasklist_lock;
 };
 
 #define SC_ARGC 6
@@ -66,7 +71,7 @@ struct itask {
 	/* Per task flags (TF_*): */
 	unsigned int             	 flags;
 
-	struct ktid                    	*tid;
+	struct ktid              	*tid;
 
 	int                      	 prio;
 	const struct isched_class	*sched_class;
@@ -75,6 +80,7 @@ struct itask {
 	u64                      	 sum_exec_runtime;
 
 	int                      	 exit_state;
+	int                      	 exit_code;
 
 	/* Context switch counters: */
 	u64                      	 nvcsw;
@@ -177,11 +183,26 @@ extern __thread void         *user_sp_scratch;
 extern __thread struct itask *current_task;
 #define current            	current_task
 
+#define tasklist_lock      	ikern_self()->tasklist_lock
+#define read_lock(lock)    	pthread_rwlock_rdlock(lock)
+#define read_unlock(lock)  	pthread_rwlock_unlock(lock)
+
 #define schedstat_enabled()	unlikely(KCONF_SCHED_STATS)
 #define schedstat_inc(var) 	do { if (schedstat_enabled()) { var++; } } while(0)
 
 #define tif_test_bit(bit)  	arch_test_bit(bit, (unsigned long *)&current->flags)
 #define tif_need_resched() 	tif_test_bit(TIF_NEED_RESCHED)
+
+#define __set_current_state(state_value)                                   	\
+	do {                                                               	\
+		IWRITE_ONCE(unsigned int, current->__state, (state_value));	\
+	} while (0)
+
+#define set_current_state(state_value)                                     	\
+	do {                                                               	\
+		IWRITE_ONCE(unsigned int, current->__state, (state_value));	\
+		__sync_synchronize();                                      	\
+	} while (0)
 
 static inline void clear_tsk_need_resched(struct itask *tsk)
 {

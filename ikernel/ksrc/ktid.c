@@ -22,6 +22,11 @@ struct ktid *tid_get_ktid(struct ktid_alloc *al, int tid)
 	return &al->slots[tid];
 }
 
+tid_t task_tid_nr(struct itask *task)
+{
+	return task->tid->id;
+}
+
 static struct ktid **task_ktid_ptr(struct itask *task)
 {
 	return &task->tid;
@@ -67,6 +72,11 @@ void ktid_init(struct ktid_alloc *al)
 
 	pthread_mutex_init(&al->lock, NULL);
 	ilisti_init(&al->ktid_head);
+}
+
+extern struct ktid_alloc *ktid_get_allocator(void)
+{
+	return &ikern_self()->tid_al;
 }
 
 struct ktid *ktid_alloc(struct ktid_alloc *al)
