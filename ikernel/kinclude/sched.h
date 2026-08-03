@@ -6,7 +6,8 @@
 #include <ilisti.h>
 #include <compiler_iattr.h>
 #include <icontext.h>
-#include <x86-64/cache.h>
+#include <cache.h>
+#include <ithread.h>
 #include <kinclude/kconf.h>
 #include <kinclude/ktypes.h>
 #include <kinclude/vcpu.h>
@@ -18,6 +19,7 @@ struct ikern;
 struct ireaper;
 struct ivcpu;
 struct itask;
+struct ithread_struct;
 
 struct rqi;
 struct rt_rqi;
@@ -91,11 +93,9 @@ struct itask {
 
 	/*
 	 * Execution context.
-	 * thread_ctx is the active execution context. kthread_ctx is used
-	 * while the scheduler executes on behalf of the task (e.g. during syscalls).
 	 */
-	icontext_t               	 thread_ctx;
-	icontext_t               	 kthread_ctx;
+	void                     	*stack;
+	struct ithread_struct    	 thread;
 
 	/*
 	 * Synchronization primitives used by task sleep/wakeup paths.
@@ -178,14 +178,16 @@ static const struct isched_class *const sched_classes[] = {
 	&idle_sched_class,
 };
 
-extern __thread void         *kernel_sp_scratch;
-extern __thread void         *user_sp_scratch;
+extern __thread void         *current_kernel_rsp;
+extern __thread void         *saved_user_rsp;
 extern __thread struct itask *current_task;
 #define current            	current_task
 
 #define tasklist_lock      	ikern_self()->tasklist_lock
 #define read_lock(lock)    	pthread_rwlock_rdlock(lock)
-#define read_unlock(lock)  	pthread_rwlock_unlock(lock)
+#define read_unlock(lock) 	pthread_rwlock_unlock(lock)
+#define write_lock(lock)  	pthread_rwlock_wrlock(lock)
+#define write_unlock(lock)	pthread_rwlock_unlock(lock)
 
 #define schedstat_enabled()	unlikely(KCONF_SCHED_STATS)
 #define schedstat_inc(var) 	do { if (schedstat_enabled()) { var++; } } while(0)

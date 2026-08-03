@@ -1,9 +1,16 @@
 #include <kinclude/sched.h>
 #include <kinclude/kfun.h>
+#include <asm/switch_to.h>
 
 static __ialways_inline struct rqi *context_switch(struct rqi *rq, struct itask *prev, struct itask *next)
 {
-	return NULL;
+	switch_to(prev, next, prev);
+	barrier();
+
+	rq = cpu_rq();
+	pthread_mutex_unlock(&rq->__lock);
+
+	return rq;
 }
 
 static void put_prev_set_next_task(struct rqi *rq, struct itask *prev, struct itask *next)

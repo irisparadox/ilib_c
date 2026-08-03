@@ -39,13 +39,17 @@ static int wait_task_zombie(struct iwait_opts *wo, struct itask *p)
 	if (icmpxchg(&p->exit_state, EXIT_ZOMBIE, EXIT_DEAD) != EXIT_ZOMBIE)
 		return 0;
 
+	read_unlock(&tasklist_lock);
 	/*
 	 * We own this task now, nobody can reap it.
 	 */
 	status = p->exit_code;
 	wo->wo_stat = status;
 
+	write_lock(&tasklist_lock);
 	ilisti_remove(&p->sibling);
+	write_unlock(&tasklist_lock);
+
 	kreaper_enqueue(kernel_reaper(), p);
 
 	return tid;

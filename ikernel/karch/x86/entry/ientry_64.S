@@ -2,11 +2,11 @@
 	.global ientry_SYSCALL_64
 	.type ientry_SYSCALL_64, @function
 ientry_SYSCALL_64:
-	movq	%rsp, %fs:user_sp_scratch@tpoff
-	movq	%fs:kernel_sp_scratch@tpoff, %rsp
+	movq	%rsp, %fs:saved_user_rsp@tpoff
+	movq	%fs:current_kernel_rsp@tpoff, %rsp
 	/* now on kernel stack, no register touched */
 
-	pushq	%fs:user_sp_scratch@tpoff	/* sp */
+	pushq	%fs:saved_user_rsp@tpoff	/* sp */
 	pushq	%r11				/* flags */
 	pushq	%rcx				/* ip */
 	pushq	%rax				/* orig_ax */
@@ -50,9 +50,40 @@ iexit_SYSCALL_64: /* label is only there for debug purposes.  */
 	popq	%rsi
 	popq	%rdi
 	addq	$8, %rsp	/* discard orig_ax - not needed.  */
-	popq	%rcx
-	popq	%r11
-	popq	%rsp
+	popq    %rcx        	/* RIP */
+	popq    %r11        	/* RFLAGS */
+
+	pushq   %r11
+	popfq
+
+	popq    %rsp        	/* User RSP */
 
 	/* sysretq */
 	jmp	*%rcx
+
+
+
+	.global __kswitch_to_asm
+	.type   __kswitch_to_asm, @function
+
+__kswitch_to_asm:
+	pushq	%rbp
+	pushq	%rbx
+	pushq	%r12
+	pushq	%r13
+	pushq	%r14
+	pushq	%r15
+
+	/* Hardcoded offset prev->thread.sp.  */
+	movq	%rsp, 216(%rdi)
+
+	movq	216(%rsi), %rsp 	/* rsp = next->thread.sp */
+
+	popq	%r15
+	popq	%r14
+	popq	%r13
+	popq	%r12
+	popq	%rbx
+	popq	%rbp
+
+	jmp __kswitch_to
