@@ -143,7 +143,7 @@ struct rqi {
 	struct itask			*stop;
 	const struct isched_class	*next_class;
 
-#if KCONF_SCHED_STATS == 1
+#ifdef KCONF_SCHED_STATS
 	unsigned int			yld_count;
 
 	unsigned int			sched_count;
@@ -212,6 +212,20 @@ extern __thread struct itask	*current_task;
 		IWRITE_ONCE(unsigned int, current->__state, (state_value));	\
 		__sync_synchronize();						\
 	} while (0)
+
+#define rq_lock(rq)		pthread_mutex_lock(&rq->__lock)
+#define rq_unlock(rq)		pthread_mutex_unlock(&rq->__lock)
+
+#define this_rq_lock()	_this_rq_lock()
+static inline struct rqi *_this_rq_lock(void)
+{
+	struct rqi *rq;
+
+	rq = cpu_rq();
+	rq_lock(rq);
+
+	return rq;
+}
 
 static inline void clear_tsk_need_resched(struct itask *tsk)
 {

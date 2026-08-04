@@ -159,7 +159,7 @@ static long do_wait(struct iwait_opts *wo)
 	return retval;
 }
 
-long kernel_wait4(tid_t utid, int *stat_addr, int options)
+long kernel_wait3(tid_t utid, int *stat_addr, int options)
 {
 	struct iwait_opts wo;
 	struct ktid *ktid = NULL;
@@ -186,9 +186,9 @@ long kernel_wait4(tid_t utid, int *stat_addr, int options)
 	return ret;
 }
 
-SYSCALL_DEFINE3(wait4, tid_t, utid, int *, stat_addr, int, options)
+SYSCALL_DEFINE3(wait3, tid_t, utid, int *, stat_addr, int, options)
 {
-	long err = kernel_wait4(utid, stat_addr, options);
+	long err = kernel_wait3(utid, stat_addr, options);
 
 	return err;
 }

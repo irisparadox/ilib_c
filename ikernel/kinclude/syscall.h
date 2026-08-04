@@ -4,9 +4,9 @@
 #include <kinclude/ktid.h>
 #include <asm/iptrace.h>
 
-#define SYS_FORK	0
+#define SYS_CLONE3	0
 #define SYS_EXIT	1
-#define SYS_WAIT4	2
+#define SYS_WAIT3	2
 #define SYS_YIELD	3
 #define SYS_GETTID	4
 
@@ -65,9 +65,9 @@
 
 extern long ido_syscall_64(struct ipt_regs *regs);
 
-extern long isys_fork(struct ipt_regs *regs);
+extern long isys_clone3(struct ipt_regs *regs);
 extern long isys_exit(struct ipt_regs *regs);
-extern long isys_wait4(struct ipt_regs *regs);
+extern long isys_wait3(struct ipt_regs *regs);
 extern long isys_sched_yield(struct ipt_regs *regs);
 extern long isys_gettid(struct ipt_regs *regs);
 

@@ -39,7 +39,7 @@ struct ivcpu {
 
 	struct ikern		*kern;
 
-#if KCONF_VCPU_STATS == 1
+#ifdef KCONF_VCPU_STATS
 	u64			vruntime;
 	u64			nr_migrate;
 	u64			nr_ran;
