@@ -14,10 +14,12 @@
 
 #define BUG_ON(condition) do { if (iunlikely(condition)) { BUG(); } } while (0)
 
-
 static inline void barrier(void)
 {
 	asm volatile("" : : : "memory");
 }
+
+#define container_of(ptr, type, member)					\
+	((type *)((char *)(ptr) - (unsigned long)&(((type *)0)->member)))
 
 #endif // KFUN_H_

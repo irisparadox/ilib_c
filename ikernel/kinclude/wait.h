@@ -38,4 +38,22 @@ static inline void init_waitqueue_func_entry(struct iwait_queue_entry *wq_entry,
 	wq_entry->func    = func;
 }
 
+static inline void init_waitqueue_entry(struct iwait_queue_entry *wq_entry, struct itask *p)
+{
+	wq_entry->flags   = 0;
+	wq_entry->private = p;
+	wq_entry->func    = default_wake_function;
+}
+
+static inline void __init_waitqueue_head(struct iwait_queue_head *wq_head)
+{
+	pthread_mutex_init(&wq_head->lock, NULL);
+	ilisti_init(&wq_head->head);
+}
+
+#define init_waitqueue_head(wq_head)			\
+	do {						\
+		__init_waitqueue_head(wq_head);		\
+	} while (0)
+
 #endif // WAIT_H_

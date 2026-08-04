@@ -71,4 +71,6 @@ extern long isys_wait3(struct ipt_regs *regs);
 extern long isys_sched_yield(struct ipt_regs *regs);
 extern long isys_gettid(struct ipt_regs *regs);
 
+extern long isyscall(long nr, long a1, long a2, long a3, long a4, long a5);
+
 #endif // SYSCALL_H_

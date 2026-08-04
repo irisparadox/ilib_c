@@ -16,7 +16,7 @@ void cpu_idle_prepare(void)
 	/* we can't go on with initialization if idle can't be allocated */
 
 	struct itask *idle = rq->idle;
-	idle->tid  = ktid_alloc(&ker->tid_al);
+	idle->tid  = ktid_alloc();
 	attach_ktid(idle);
 	idle->prio = MAX_PRIO - 1;
 

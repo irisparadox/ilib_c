@@ -5,9 +5,8 @@
 #include <deftypei.h>
 #include <ilisti.h>
 #include <compiler_iattr.h>
-#include <icontext.h>
-#include <cache.h>
-#include <ithread.h>
+#include <arch/cache.h>
+#include <arch/ithread.h>
 #include <kinclude/kconf.h>
 #include <kinclude/ktypes.h>
 #include <kinclude/vcpu.h>

@@ -27,10 +27,12 @@ struct ktid_alloc {
 	pthread_mutex_t		lock;
 };
 
-extern struct itask *tid_task(struct ktid_alloc *al, int tid);
+extern struct itask *tid_task(int tid);
 extern struct itask *ktid_get_task(struct ktid *ktid);
-extern struct ktid  *tid_get_ktid(struct ktid_alloc *al, int tid);
+extern struct ktid  *tid_get_ktid(int tid);
+extern struct ktid  *get_task_ktid(struct itask *p);
 extern tid_t  task_tid_nr(struct itask *task);
+extern tid_t  ktid_nr(struct ktid *ktid);
 
 static inline bool ktid_has_task(struct ktid *ktid)
 {
@@ -44,7 +46,7 @@ extern void change_ktid(struct itask *task, struct ktid *ktid);
 
 extern void ktid_init(struct ktid_alloc *al);
 extern struct ktid_alloc *ktid_get_allocator(void);
-extern struct ktid *ktid_alloc(struct ktid_alloc *al);
-extern void  free_tid(struct ktid_alloc *al, struct ktid *ktid);
+extern struct ktid *ktid_alloc(void);
+extern void  free_tid(struct ktid *ktid);
 
 #endif // KTID_H_

@@ -11,6 +11,10 @@ struct itask *__kswitch_to_asm(struct itask *prev,
 struct itask *__kswitch_to(struct itask *prev,
 			   struct itask *next);
 
+extern void ret_from_fork_asm(void);
+extern void ret_from_fork(struct itask *prev, struct ipt_regs *regs,
+			  int (*fn)(void *), void *fn_arg);
+
 /*
  * This is the structure point to by thread.sp for an inactive task.
  * The order of the fields must match the code in __kswitch_to_asm().

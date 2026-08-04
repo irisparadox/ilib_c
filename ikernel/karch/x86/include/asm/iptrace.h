@@ -24,4 +24,9 @@ struct ipt_regs {
 	unsigned long	sp;
 };
 
+#define task_pt_regs(p)						\
+	((struct ipt_regs *)((char *)p->stack + KSTACK_SIZE) - 1)
+
+#define current_pt_regs()	task_pt_regs(current)
+
 #endif // IPTRACE_H_

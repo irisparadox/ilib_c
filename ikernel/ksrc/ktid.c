@@ -3,9 +3,11 @@
 #include <kinclude/sched.h>
 #include <kinclude/syscall.h>
 
-struct itask *tid_task(struct ktid_alloc *al, int tid)
+struct itask *tid_task(int tid)
 {
 	if (tid >= TID_MAX || tid < 0) return NULL;
+
+	struct ktid_alloc *al = ktid_get_allocator();
 
 	return al->slots[tid].thread;
 }
@@ -15,16 +17,28 @@ struct itask *ktid_get_task(struct ktid *ktid)
 	return ktid->thread;
 }
 
-struct ktid *tid_get_ktid(struct ktid_alloc *al, int tid)
+struct ktid *tid_get_ktid(int tid)
 {
 	if (tid >= TID_MAX || tid < 0) return NULL;
 
+	struct ktid_alloc *al = ktid_get_allocator();
+
 	return &al->slots[tid];
+}
+
+struct ktid *get_task_ktid(struct itask *p)
+{
+	return p->tid;
 }
 
 tid_t task_tid_nr(struct itask *task)
 {
 	return task->tid->id;
+}
+
+tid_t ktid_nr(struct ktid *ktid)
+{
+	return ktid->id;
 }
 
 static struct ktid **task_ktid_ptr(struct itask *task)
@@ -79,10 +93,11 @@ extern struct ktid_alloc *ktid_get_allocator(void)
 	return &ikern_self()->tid_al;
 }
 
-struct ktid *ktid_alloc(struct ktid_alloc *al)
+struct ktid *ktid_alloc(void)
 {
 	struct ktid *ktid;
 	struct ilinode *node;
+	struct ktid_alloc *al = ktid_get_allocator();
 
 	pthread_mutex_lock(&al->lock);
 
@@ -102,8 +117,10 @@ struct ktid *ktid_alloc(struct ktid_alloc *al)
 	return ktid;
 }
 
-void free_tid(struct ktid_alloc *al, struct ktid *ktid)
+void free_tid(struct ktid *ktid)
 {
+	struct ktid_alloc *al = ktid_get_allocator();
+	
 	pthread_mutex_lock(&al->lock);
 	ilisti_push_front(&al->ktid_head, &ktid->ktid_link);
 	pthread_mutex_unlock(&al->lock);

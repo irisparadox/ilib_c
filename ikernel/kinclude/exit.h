@@ -12,4 +12,6 @@ struct iwait_opts {
 	int			 notask_error;
 };
 
+extern long __do_wait(struct iwait_opts *wo);
+
 #endif // EXIT_H_
