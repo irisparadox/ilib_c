@@ -1,6 +1,7 @@
 #include <kinclude/sched.h>
 #include <kinclude/kfun.h>
 #include <asm/switch_to.h>
+#include <kinclude/init.h>
 
 static __ialways_inline struct rqi *context_switch(struct rqi *rq, struct itask *prev, struct itask *next)
 {

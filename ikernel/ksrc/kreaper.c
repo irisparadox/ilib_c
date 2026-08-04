@@ -45,6 +45,8 @@ void kreaper_init(struct kreaper *r, struct ikern *k)
 
 		BUG(); /* no reaper, no fun */
 	}
+
+	pthread_setname_np(r->grim_thread, "reaper");
 }
 
 void kreaper_exit(struct kreaper *r)

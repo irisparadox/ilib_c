@@ -3,8 +3,9 @@
 #include <kinclude/sched.h>
 #include <kinclude/vcpu.h>
 #include <kinclude/kfun.h>
+#include <kinclude/init.h>
 
-static void cpu_idle_prepare(void)
+void cpu_idle_prepare(void)
 {
 	struct rqi   *rq  = cpu_rq();
 	struct ikern *ker = ikern_self();
@@ -54,7 +55,6 @@ static void do_idle(void)
 
 void cpu_startup_entry(void)
 {
-	cpu_idle_prepare();
 	while (1)
 		do_idle();
 }

@@ -74,10 +74,10 @@ __kswitch_to_asm:
 	pushq	%r14
 	pushq	%r15
 
-	/* Hardcoded offset prev->thread.sp.  */
-	movq	%rsp, 216(%rdi)
+	/* prev->thread.sp.  */
+	movq	%rsp, (%rdi)
 
-	movq	216(%rsi), %rsp 	/* rsp = next->thread.sp */
+	movq	(%rsi), %rsp 	/* rsp = next->thread.sp */
 
 	popq	%r15
 	popq	%r14
