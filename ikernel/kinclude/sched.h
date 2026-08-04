@@ -25,8 +25,8 @@ struct rqi;
 struct rt_rqi;
 struct isched_class;
 
-#define SM_NONE	0
-#define SM_IDLE	1
+#define SM_NONE		0
+#define SM_IDLE		1
 #define SM_PREEMPT	2
 
 struct ikern {
@@ -37,7 +37,7 @@ struct ikern {
 	pthread_rwlock_t	tasklist_lock;
 };
 
-#define SC_ARGC		6
+#define SC_ARGC			6
 #define TASK_COMM_LEN		16
 
 #define TIF_NEED_RESCHED	(1u << 3)
@@ -93,7 +93,7 @@ struct itask {
 	struct ilinode			children;
 	struct ilinode			sibling;
 
-	struct iwait_queue_head	wait_chldexit;
+	struct iwait_queue_head		wait_chldexit;
 
 	/* Context switch counters: */
 	u64				nvcsw;
@@ -106,7 +106,7 @@ struct itask {
 	 * Synchronization primitives used by task sleep/wakeup paths.
 	 */
 	struct iwait_queue_entry	wait_entry;
-	pthread_mutex_t		sleep_lock;
+	pthread_mutex_t			sleep_lock;
 	pthread_cond_t			sleep_signal;
 
 	char				comm[TASK_COMM_LEN];
@@ -136,7 +136,7 @@ struct rqi {
 	 */
 	u64				nr_switches	__i__cacheline_aligned;
 
-	pthread_mutex_t		__lock;
+	pthread_mutex_t			__lock;
 
 	struct rt_rqi			rt;
 
@@ -144,14 +144,14 @@ struct rqi {
 	const struct isched_class	*next_class;
 
 #if KCONF_SCHED_STATS == 1
-	unsigned int yld_count;
+	unsigned int			yld_count;
 
-	unsigned int sched_count;
-	unsigned int sched_goidle;
+	unsigned int			sched_count;
+	unsigned int			sched_goidle;
 #endif /* IDSCHED_SCHEDSTATS == 1 */
 };
 
-#define TASK_ON_RQ_NONE	0
+#define TASK_ON_RQ_NONE		0
 #define TASK_ON_RQ_QUEUED	1
 #define TASK_ON_RQ_MIGRATING	2
 
@@ -188,10 +188,10 @@ static const struct isched_class *const sched_classes[] = {
 extern __thread void		*current_kernel_rsp;
 extern __thread void		*saved_user_rsp;
 extern __thread struct itask	*current_task;
-#define current		current_task
+#define current			current_task
 
 #define tasklist_lock		ikern_self()->tasklist_lock
-#define read_lock(lock)	pthread_rwlock_rdlock(lock)
+#define read_lock(lock)		pthread_rwlock_rdlock(lock)
 #define read_unlock(lock)	pthread_rwlock_unlock(lock)
 #define write_lock(lock)	pthread_rwlock_wrlock(lock)
 #define write_unlock(lock)	pthread_rwlock_unlock(lock)
