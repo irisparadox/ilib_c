@@ -4,16 +4,16 @@
 #include <kinclude/ktid.h>
 #include <asm/iptrace.h>
 
-#define SYS_FORK 	0
-#define SYS_EXIT 	1
+#define SYS_FORK	0
+#define SYS_EXIT	1
 #define SYS_WAIT4	2
 #define SYS_YIELD	3
 #define SYS_GETTID	4
 
 #define NR_SYSCALLS	5
 
-#define __SC_DECL(t, a)   t a
-#define __SC_CAST(t, a)   (t)a
+#define __SC_DECL(t, a)	t a
+#define __SC_CAST(t, a)	(t)a
 
 #define __MAP0(m,...)
 #define __MAP1(m,t,a,...) m(t,a)
@@ -24,7 +24,7 @@
 #define __MAP6(m,t,a,...) m(t,a), __MAP5(m,__VA_ARGS__)
 #define __MAP(n,...) __MAP##n(__VA_ARGS__)
 
-#define __SC_TYPE(t, a)   t
+#define __SC_TYPE(t, a)	t
 
 #define SC_X86_64_PT_ARG0(m, ...)
 #define SC_X86_64_PT_ARG1(m, t1) \
@@ -53,9 +53,9 @@
 	}									\
 	static inline long __do_isys##name(__MAP(x,__SC_DECL, ##__VA_ARGS__))
 
-#define SYSCALL_DEFINEx(x, name, ...) __SYSCALL_DEFINEx(x, name, ##__VA_ARGS__)
+#define SYSCALL_DEFINEx(x, name, ...)	__SYSCALL_DEFINEx(x, name, ##__VA_ARGS__)
 
-#define SYSCALL_DEFINE0(name)     	SYSCALL_DEFINEx(0, _##name)
+#define SYSCALL_DEFINE0(name)		SYSCALL_DEFINEx(0, _##name)
 #define SYSCALL_DEFINE1(name, ...)	SYSCALL_DEFINEx(1, _##name, __VA_ARGS__)
 #define SYSCALL_DEFINE2(name, ...)	SYSCALL_DEFINEx(2, _##name, __VA_ARGS__)
 #define SYSCALL_DEFINE3(name, ...)	SYSCALL_DEFINEx(3, _##name, __VA_ARGS__)

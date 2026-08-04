@@ -2,9 +2,7 @@
 #define ITHREAD_H_
 
 struct ithread_struct {
-	unsigned long sp;
-
-	void *ustack;
+	unsigned long	sp;
 };
 
 #endif // ITHREAD_H_

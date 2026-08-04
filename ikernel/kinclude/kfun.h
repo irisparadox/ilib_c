@@ -6,10 +6,10 @@
 #include <deftypei.h>
 #include <compiler_iattr.h>
 
-#define BUG() do { \
-	fprintf(stderr, "BUG: failure at %s:%d/%s()!\n", \
-		__FILE__, __LINE__, __func__); \
-	abort(); \
+#define BUG() do {						\
+	fprintf(stderr, "BUG: failure at %s:%d/%s()!\n",	\
+		__FILE__, __LINE__, __func__);			\
+	abort();						\
 } while (0)
 
 #define BUG_ON(condition) do { if (iunlikely(condition)) { BUG(); } } while (0)

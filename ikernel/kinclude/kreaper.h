@@ -5,16 +5,16 @@
 #include <ilisti.h>
 
 struct kreaper {
-	pthread_t grim_thread;
+	pthread_t		grim_thread;
 
-	pthread_mutex_t lock;
-	pthread_cond_t  grim_sig;
+	pthread_mutex_t		lock;
+	pthread_cond_t		grim_sig;
 
-	struct ilinode zombies;
-	struct ilinode children;
-	struct ilinode poison;
+	struct ilinode		zombies;
+	struct ilinode		children;
+	struct ilinode		poison;
 
-	struct ikern *kernel;
+	struct ikern		*kernel;
 };
 
 extern struct kreaper *kernel_reaper(void);

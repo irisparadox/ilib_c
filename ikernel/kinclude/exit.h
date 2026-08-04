@@ -2,14 +2,14 @@
 #define EXIT_H_
 
 struct iwait_opts {
-	enum tid_type      	 wo_type;
-	int                	 wo_flags;
-	struct ktid        	*wo_ktid;
+	enum tid_type		 wo_type;
+	int			 wo_flags;
+	struct ktid		*wo_ktid;
 
-	int                	 wo_stat;
+	int			 wo_stat;
 
 	iwait_queue_entry_t	 child_wait;
-	int                	 notask_error;
+	int			 notask_error;
 };
 
 #endif // EXIT_H_

@@ -35,8 +35,8 @@ struct fork_frame {
 	struct ipt_regs regs;
 };
 
-#define switch_to(prev, next, last)                	\
-do {                                               	\
+#define switch_to(prev, next, last)			\
+do {							\
 	((last) = __kswitch_to_asm((prev), (next)));	\
 } while (0)
 

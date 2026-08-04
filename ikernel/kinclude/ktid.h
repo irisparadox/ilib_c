@@ -6,8 +6,8 @@
 #include <ilisti.h>
 #include <kinclude/ktypes.h>
 
-#define tid_t __ikernel_tid
-#define TID_MAX 32768
+#define tid_t		__ikernel_tid
+#define TID_MAX		32768
 
 enum tid_type {
 	TIDTYPE_TID,
@@ -15,16 +15,16 @@ enum tid_type {
 };
 
 struct ktid {
-	tid_t          	 id;
-	struct itask   	*thread;
-	struct ilinode 	 ktid_link;
+	tid_t			id;
+	struct itask		*thread;
+	struct ilinode		ktid_link;
 };
 
 struct ktid_alloc {
-	struct ktid     	slots[TID_MAX];
-	struct ilinode  	ktid_head;
-	tid_t           	next_tid;
-	pthread_mutex_t 	lock;
+	struct ktid		slots[TID_MAX];
+	struct ilinode		ktid_head;
+	tid_t			next_tid;
+	pthread_mutex_t		lock;
 };
 
 extern struct itask *tid_task(struct ktid_alloc *al, int tid);
