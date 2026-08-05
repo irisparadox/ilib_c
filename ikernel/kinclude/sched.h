@@ -39,8 +39,9 @@ struct ikern {
 #define SC_ARGC			6
 #define TASK_COMM_LEN		16
 
-#define TIF_NEED_RESCHED	(1u << 3)
-#define TIF____REAPED		(1u << 5)
+#define TIF_NEED_RESCHED	0x00000001
+#define TIF____REAPED		0x00000002
+#define TF_IDLE			0x00000004
 
 /* Used in tsk->__state: */
 #define TASK_RUNNING		0x00000000
@@ -266,5 +267,10 @@ extern void schedule_idle(void);
 extern void resched_curr(struct rqi *rq);
 extern void wakeup_preempt(struct rqi *rq, struct itask *p, int flags);
 extern int try_to_wake_up(struct itask *p, unsigned int state, int flags);
+
+extern void enqueue_task(struct rqi *rq, struct itask *p, int flags);
+extern inline bool dequeue_task(struct rqi *rq, struct itask *p, int flags);
+
+extern void activate_task(struct rqi *rq, struct itask *p, int flags);
 
 #endif // SCHED_H_
