@@ -3,6 +3,115 @@
 #include <asm/switch_to.h>
 #include <kinclude/init.h>
 
+int default_wake_function(struct iwait_queue_entry *wq_entry, unsigned int mode, int flags, void *key)
+{
+	return try_to_wake_up(wq_entry->private, mode, flags);
+}
+
+static __ialways_inline
+int __task_state_match(struct itask *p, unsigned int state)
+{
+	if (IREAD_ONCE(unsigned int, p->__state) & state)
+		return 1;
+
+	return 0;
+}
+
+static __ialways_inline
+int ttwu_state_match(struct itask *p, unsigned int state, int *success)
+{
+	int match;
+
+	*success = !!(match = __task_state_match(p, state));
+
+	return match > 0;
+}
+
+static inline void ttwu_do_wakeup(struct itask *p)
+{
+	IWRITE_ONCE(unsigned int, p->__state, TASK_RUNNING);
+}
+
+static void ttwu_do_activate(struct rqi *rq, struct itask *p, int flags)
+{
+	activate_task(rq, p, flags);
+	wakeup_preempt(rq, p, flags);
+
+	ttwu_do_wakeup(p);
+
+	if (p->sched_class->task_woken) {
+		rq_unlock(rq);
+		p->sched_class->task_woken(rq, p);
+		rq_lock(rq);
+	}
+}
+
+static void ttwu_queue(struct itask *p, int flags)
+{
+	struct rqi *rq = cpu_rq();
+
+	rq_lock(rq);
+	ttwu_do_activate(rq, p, flags);
+	rq_unlock(rq);
+}
+
+static int ttwu_runnable(struct itask *p, int flags)
+{
+	struct rqi *rq = task_rq(p);
+	rq_lock(rq);
+
+	if (!task_on_rq_queued(p)) {
+		rq_unlock(rq);
+		return 0;
+	}	
+
+	ttwu_do_wakeup(p);
+	return 1;
+}
+
+void wakeup_preempt(struct rqi *rq, struct itask *p, int flags)
+{
+	if (p->sched_class == rq->next_class) {
+		rq->next_class->wakeup_preempt(rq, p, flags);
+	} else if (sched_class_above(p->sched_class, rq->next_class)) {
+		resched_curr();
+		rq->next_class = p->sched_class;
+	}
+}
+
+int try_to_wake_up(struct itask *p, unsigned int state, int flags)
+{
+	int success = 0;
+
+	if (p == current) {
+		if (!ttwu_state_match(p, state, &success))
+			goto out;
+
+		ttwu_do_wakeup(p);
+		goto out;
+	}
+
+	scoped_mutex(&p->sleep_lock) {
+		if (!ttwu_state_match(p, state, &success))
+			break;
+
+		if (IREAD_ONCE(u8, p->on_rq) && ttwu_runnable(p, flags))
+			break;
+
+		IWRITE_ONCE(unsigned int, p->__state, TASK_WAKING);
+
+		ttwu_queue(p, flags);
+	}
+
+ out:
+	return success;
+}
+
+void resched_curr(struct rqi *rq)
+{
+	__resched_curr(rq, TIF_NEED_RESCHED);
+}
+
 static __ialways_inline struct rqi *context_switch(struct rqi *rq, struct itask *prev, struct itask *next)
 {
 	switch_to(prev, next, prev);

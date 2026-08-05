@@ -17,6 +17,7 @@
 
 struct ikern;
 struct rqi;
+struct itask;
 
 struct ivcpu_array {
 	unsigned int		ncpu;
@@ -49,6 +50,7 @@ struct ivcpu {
 extern struct ivcpu	*cpu_self(void);
 extern struct ikern	*ikern_self(void);
 extern struct rqi	*cpu_rq(void);
+extern struct rqi	*task_rq(struct itask *p);
 extern bool		cpu_is_online(struct ivcpu *cpu);
 extern bool		cpu_is_offline(struct ivcpu *cpu);
 

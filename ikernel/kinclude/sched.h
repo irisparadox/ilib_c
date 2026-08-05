@@ -47,6 +47,7 @@ struct ikern {
 #define TASK_INTERRUPTIBLE	0x00000001
 #define TASK_UNINTERRUPTIBLE	0x00000002
 #define TASK_DEAD		0x00000080
+#define TASK_WAKING		0x00000200
 #define TASK_NOLOAD		0x00000400
 #define TASK_NEW		0x00000800
 /* Used in tsk->exit_state: */
@@ -109,6 +110,7 @@ struct itask {
 	pthread_cond_t			sleep_signal;
 
 	char				comm[TASK_COMM_LEN];
+	int				cpu;
 };
 
 #define MAX_PRIO	(MAX_RT_PRIO + NICE_WIDTH)
@@ -159,11 +161,15 @@ struct isched_class {
 	bool (*dequeue_task) (struct rqi *rq, struct itask *p, int flags);
 
 	void (*yield_task)   (struct rqi *rq);
+	
+	void (*wakeup_preempt)(struct rqi *rq, struct itask *p, int flags);
 
 	struct itask *(*pick_task)(struct rqi *rq);
 
 	void (*put_prev_task)(struct rqi *rq, struct itask *p, struct itask *next);
 	void (*set_next_task)(struct rqi *rq, struct itask *p, bool first);
+
+	void (*task_woken)(struct rqi *this_rq, struct itask *task);
 
 	void (*task_tick)(struct rqi *rq, struct itask *p);
 
@@ -183,6 +189,20 @@ static const struct isched_class *const sched_classes[] = {
 	&rt_sched_class,
 	&idle_sched_class,
 };
+
+static inline int sched_class_above(const struct isched_class *a,
+				    const struct isched_class *b)
+{
+	if (a == b)
+		return 0;
+	if (a == &stop_sched_class)
+		return 1;
+	if (b == &stop_sched_class)
+		return 0;
+	if (a == &rt_sched_class)
+		return 1;
+	return 0;
+}
 
 extern __thread void		*current_kernel_rsp;
 extern __thread void		*saved_user_rsp;
@@ -236,7 +256,15 @@ static __ialways_inline bool need_resched(void)
 	return unlikely(tif_need_resched());
 }
 
+static inline int task_on_rq_queued(struct itask *p)
+{
+	return IREAD_ONCE(u8, p->on_rq) == TASK_ON_RQ_QUEUED;
+}
+
 extern void schedule(void);
 extern void schedule_idle(void);
+extern void resched_curr(struct rqi *rq);
+extern void wakeup_preempt(struct rqi *rq, struct itask *p, int flags);
+extern int try_to_wake_up(struct itask *p, unsigned int state, int flags);
 
 #endif // SCHED_H_

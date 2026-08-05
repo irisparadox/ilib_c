@@ -1,6 +1,7 @@
 #include <compiler_iattr.h>
 #include <kinclude/vcpu.h>
 #include <pthread.h>
+#include <kinclude/sched.h>
 
 static pthread_key_t tls_cpu;
 
@@ -17,6 +18,11 @@ struct ikern *ikern_self(void)
 struct rqi *cpu_rq(void)
 {
 	return cpu_self()->rq;
+}
+
+struct rqi *task_rq(struct itask *p)
+{
+	return ikern_self()->vcpus.ventries[p->cpu]->rq;
 }
 
 bool cpu_is_online(struct ivcpu *cpu)

@@ -1,5 +1,3 @@
-#include "asm/iptrace.h"
-#include "kinclude/ktid.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

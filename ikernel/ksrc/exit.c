@@ -166,12 +166,11 @@ long kernel_wait3(tid_t utid, int *stat_addr, int options)
 	enum tid_type type;
 	long ret;
 
-	struct ktid_alloc *kal = ktid_get_allocator();
 	if (utid == -1)
 		type = TIDTYPE_MAX;
 	else {
 		type = TIDTYPE_TID;
-		ktid = tid_get_ktid(kal, utid);
+		ktid = tid_get_ktid(utid);
 	}
 
 	wo.wo_type  = type;

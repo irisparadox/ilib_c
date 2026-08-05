@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <deftypei.h>
 #include <compiler_iattr.h>
 
@@ -21,5 +22,16 @@ static inline void barrier(void)
 
 #define container_of(ptr, type, member)					\
 	((type *)((char *)(ptr) - (unsigned long)&(((type *)0)->member)))
+
+static inline void mutex_guard_release(pthread_mutex_t **lock)
+{
+	if (*lock)
+		pthread_mutex_unlock(*lock);
+}
+
+#define scoped_mutex(lockp)								\
+for (pthread_mutex_t *_g __attribute__((cleanup(mutex_guard_release))) = (lockp),	\
+	*_once = (pthread_mutex_lock(_g), NULL);					\
+	_once == NULL; _once = (void *)1)
 
 #endif // KFUN_H_
