@@ -66,6 +66,7 @@ int ttwu_state_match(struct itask *p, unsigned int state, int *success)
  */
 static inline void ttwu_do_wakeup(struct itask *p)
 {
+	p->is_blocked = 0;
 	IWRITE_ONCE(unsigned int, p->__state, TASK_RUNNING);
 }
 
@@ -147,6 +148,52 @@ void wakeup_preempt(struct rqi *rq, struct itask *p, int flags)
 		resched_curr(rq);
 		rq->next_class = p->sched_class;
 	}
+}
+
+/*
+ * Helper function for __schedule().
+ *
+ * Attempts to deactivate the current task if it is entering a blocking
+ * state. If the task should not block, its state is restored to
+ * TASK_RUNNING and it remains runnable.
+ */
+static bool try_to_block_task(struct rqi *rq, struct itask *p,
+			      unsigned long *task_state_p, bool should_block)
+{
+	unsigned long task_state = *task_state_p;
+
+	p->is_blocked = 1;
+
+	if (!should_block)
+		return false;
+
+	dequeue_task(rq, p, 0);
+	return true;
+}
+
+/*
+ * wake_up_new_task - wake up a newly created task for the first time.
+ *
+ * Perform the scheduler initialization required before a task can be
+ * scheduled, enqueue it on its target runqueue, and give the scheduler
+ * an opportunity to preempt the currently running task if appropriate.
+ */
+void wake_up_new_task(struct itask *p)
+{
+	struct rqi *rq;
+
+	pthread_mutex_lock(&p->sleep_lock);
+	IWRITE_ONCE(unsigned int, p->__state, TASK_RUNNING);
+
+	rq = __task_rq_lock(p);
+
+	activate_task(rq, p, 0);
+	if (p->sched_class->task_woken) {
+		rq_unlock(rq);
+		p->sched_class->task_woken(rq, p);
+		rq_lock(rq);
+	}
+	task_rq_unlock(rq, p);
 }
 
 /**
@@ -279,11 +326,11 @@ static void __schedule(int sched_mode)
 	rq = cpu_rq();
 	prev = rq->curr;
 
-	pthread_mutex_lock(&rq->__lock);
+	rq_lock(rq);
 
 	switch_count = &prev->nivcsw;
 
-	preempt = sched_mode = SM_PREEMPT;
+	preempt = sched_mode == SM_PREEMPT;
 
 	prev_state = IREAD_ONCE(unsigned int, prev->__state);
 	if (sched_mode == SM_IDLE) {
@@ -293,7 +340,8 @@ static void __schedule(int sched_mode)
 			goto picked;
 		}
 	} else if (!preempt && prev_state) {
-		prev->sched_class->dequeue_task(rq, prev, 0);
+		try_to_block_task(rq, prev, &prev_state,
+				  !task_is_blocked(prev));
 		switch_count = &prev->nvcsw;
 	}
 
@@ -308,7 +356,7 @@ static void __schedule(int sched_mode)
 
 		rq = context_switch(rq, prev, next);
 	} else {
-		pthread_mutex_unlock(&rq->__lock);
+		rq_unlock(rq);
 	}
 }
 

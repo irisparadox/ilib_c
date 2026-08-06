@@ -10,7 +10,6 @@
 #include <kinclude/kfun.h>
 #include <kinclude/task.h>
 #include <kinclude/sched.h>
-#include <kinclude/clone.h>
 #include <kinclude/kerrno.h>
 #include <kinclude/syscall.h>
 
@@ -45,75 +44,12 @@ struct itask *dup_task_struct(struct itask *p)
 		return ERR_PTR(-ENOMEM);
 	}
 
-	char vma_name[TASK_COMM_LEN + sizeof("/kstack")];
-	snprintf(vma_name, sizeof(vma_name), "%s/kstack", new->comm);
-	
-	prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, new->stack, KSTACK_SIZE, vma_name);
-
 	return new;
-}
-
-/*
- * Construct the child's initial kernel stack.
- *
- * The kernel stack grows downward:
- *
- *           Higher addresses
- *      +-----------------------+  <-- p->stack + KSTACK_SIZE
- *      |       ipt_regs        |
- *      +-----------------------+
- *      |      ret_addr         |  <-- ret_from_fork_asm
- *      |         rbp           |
- *      |         rbx           |
- *      |         r12           |
- *      |         r13           |
- *      |         r14           |
- *      |         r15           |  <-- p->thread.sp
- *      +-----------------------+
- *      |                       |
- *      |    free stack space   |
- *      |                       |
- *      +-----------------------+  <-- p->stack
- *            Lower addresses
- *
- * On the first context switch:
- *
- *   __kswitch_to_asm
- *       -> restores r15-rbp
- *       -> jumps to __kswitch_to()
- *
- *   __kswitch_to()
- *       -> returns
- *
- *   ret
- *       -> ret_from_fork_asm
- */
-int copy_thread(struct itask *p, struct clone_args *args)
-{
-	unsigned long sp = args->stack;
-	struct inactive_task_frame *frame;
-	struct fork_frame *fork_frame;
-	struct ipt_regs *childregs;
-	int ret = 0;
-	
-	childregs = task_pt_regs(p);
-	fork_frame = container_of(childregs, struct fork_frame, regs);
-	frame = &fork_frame->frame;
-
-	frame->ret_addr = (unsigned long)ret_from_fork_asm;
-	p->thread.sp = (unsigned long)fork_frame;
-
-	*childregs = *current_pt_regs();
-	childregs->ax = 0;
-
-	if (sp)
-		childregs->sp = sp;
-
-	return ret;
 }
 
 struct itask *copy_task(struct ktid *ktid, struct clone_args *args)
 {
+	/* TODO Fix ordering hazards, ktid allocation and flags */
 	struct itask *p;
 	int retval;
 
@@ -125,8 +61,8 @@ struct itask *copy_task(struct ktid *ktid, struct clone_args *args)
 	if (retval)
 		goto err;
 
-	p->tid = ktid_alloc();
-	if (!p->tid) {
+	ktid = ktid_alloc();
+	if (!ktid) {
 		retval = -EAGAIN;
 		goto err;
 	}
@@ -152,6 +88,14 @@ struct itask *copy_task(struct ktid *ktid, struct clone_args *args)
 	p->exit_code        = 0;
 	p->nvcsw            = 0;
 	p->nivcsw           = 0;
+
+	if (args->name)
+		snprintf(p->comm, sizeof(p->comm), "%s", args->name);
+
+	char vma_name[TASK_COMM_LEN + sizeof("/kstack")];
+	snprintf(vma_name, sizeof(vma_name), "%s/kstack", p->comm);
+	
+	prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, p->stack, KSTACK_SIZE, vma_name);
 	
 	return p;
 
@@ -182,6 +126,33 @@ tid_t kernel_clone(struct clone_args *args)
 	wake_up_new_task(p);
 
 	return nr;
+}
+
+/*
+ * Create a kernel thread.
+ */
+tid_t kernel_thread(int (*fn)(void *), void *arg, const char *name)
+{
+	struct clone_args args = {
+		.name		= name,
+		.fn		= fn,
+		.fn_arg		= arg,
+	};
+
+	return kernel_clone(&args);
+}
+
+/*
+ * Create a user mode thread.
+ */
+tid_t user_mode_thread(int (*fn)(void *), void *arg)
+{
+	struct clone_args args = {
+		.fn		= fn,
+		.fn_arg		= arg,
+	};
+
+	return kernel_clone(&args);
 }
 
 /**

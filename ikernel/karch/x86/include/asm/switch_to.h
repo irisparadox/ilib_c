@@ -44,4 +44,12 @@ do {							\
 	((last) = __kswitch_to_asm((prev), (next)));	\
 } while (0)
 
+
+static inline void kthread_frame_init(struct inactive_task_frame *frame,
+				      int (*fun)(void *), void *arg)
+{
+	frame->bx = (unsigned long)fun;
+	frame->r12 = (unsigned long)arg;
+}
+
 #endif // ASM_X86_SWITCH_TO_H

@@ -39,9 +39,11 @@ struct ikern {
 #define SC_ARGC			6
 #define TASK_COMM_LEN		16
 
-#define TIF_NEED_RESCHED	0x00000001
-#define TIF____REAPED		0x00000002
-#define TF_IDLE			0x00000004
+#define TIF_NEED_RESCHED	0x10000000
+#define TIF____REAPED		0x20000000
+#define TF_IDLE			0x00000002
+#define TF_EXITING		0x00000004
+#define TF_KTHREAD		0x00200000
 
 /* Used in tsk->__state: */
 #define TASK_RUNNING		0x00000000
@@ -68,6 +70,7 @@ struct itask {
 
 	unsigned int			__state;
 	u8				on_rq;
+	u8				is_blocked;
 
 	/* Per task flags (TF_*): */
 	unsigned int			flags;
@@ -247,6 +250,22 @@ static inline struct rqi *_this_rq_lock(void)
 	return rq;
 }
 
+static inline struct rqi *__task_rq_lock(struct itask *p)
+{
+	struct rqi *rq;
+
+	rq = task_rq(p);
+	rq_lock(rq);
+
+	return rq;
+}
+
+static inline void task_rq_unlock(struct rqi *rq, struct itask *p)
+{
+	rq_unlock(rq);
+	pthread_mutex_unlock(&p->sleep_lock);
+}
+
 static inline void clear_tsk_need_resched(struct itask *tsk)
 {
 	__katomic_long_andnot(TIF_NEED_RESCHED, (__katomic_long_t *)&tsk->flags);
@@ -262,11 +281,18 @@ static inline int task_on_rq_queued(struct itask *p)
 	return IREAD_ONCE(u8, p->on_rq) == TASK_ON_RQ_QUEUED;
 }
 
+static inline bool task_is_blocked(struct itask *p)
+{
+	return !!p->is_blocked;
+}
+
 extern void schedule(void);
 extern void schedule_idle(void);
+extern void schedule_tail(struct itask *prev);
 extern void resched_curr(struct rqi *rq);
 extern void wakeup_preempt(struct rqi *rq, struct itask *p, int flags);
 extern int try_to_wake_up(struct itask *p, unsigned int state, int flags);
+extern void wake_up_new_task(struct itask *p);
 
 extern void enqueue_task(struct rqi *rq, struct itask *p, int flags);
 extern inline bool dequeue_task(struct rqi *rq, struct itask *p, int flags);
